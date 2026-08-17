@@ -1,10 +1,16 @@
-name: "Zentriks — journey comercial 5 páginas"
+name: "Zentriks — journey comercial con think time"
 description: >
-  Visitante profesional: home → beneficios → peak → robots → contacto.
-  Navega por el menú real y valida el H1 de cada página.
+  Visitante profesional evaluando el producto: home → beneficios → peak →
+  robots → contacto. Entre página y página hay pausas aleatorias que simulan
+  el tiempo que una persona real dedica a leer. Los rangos "min-max" se
+  sortean en cada iteración para que las sondas no queden sincronizadas.
+
+  Sin estas pausas cada sonda navega sin parar y consume ~0,9 vCPU, un ritmo
+  que ningún usuario humano tiene: satura el generador y las métricas miden
+  la contención de CPU propia en vez del sitio objetivo.
 
 steps:
-  # 1. Home
+  # 1. Home — llega desde una búsqueda y escanea la propuesta de valor
   - action: open_url
     value: "https://www.zentriks.cl/"
     timeout: 30000
@@ -13,8 +19,11 @@ steps:
     xpath: "//h1[contains(., 'Pon tu plataforma al límite')]"
     timeout: 15000
     description: "Home: H1 de propuesta de valor"
+  - action: wait
+    value: "4000-9000"
+    description: "Lee el hero y decide si le interesa"
 
-  # 2. Beneficios
+  # 2. Beneficios — la primera pregunta del comprador es qué gana
   - action: click
     selector: 'a[href="/beneficios"]'
     timeout: 10000
@@ -23,8 +32,11 @@ steps:
     xpath: "//h1[contains(., 'El robot que pone tu plataforma al límite')]"
     timeout: 15000
     description: "Beneficios: H1 visible"
+  - action: wait
+    value: "5000-11000"
+    description: "Revisa los beneficios en detalle"
 
-  # 3. Peak
+  # 3. Peak — valida si aplica a su caso de uso
   - action: click
     selector: 'a[href="/peak"]'
     timeout: 10000
@@ -33,8 +45,11 @@ steps:
     xpath: "//h1[contains(., 'Tu plataforma soporta')]"
     timeout: 15000
     description: "Peak: H1 visible"
+  - action: wait
+    value: "4000-9000"
+    description: "Evalúa el caso de uso de peak"
 
-  # 4. Robots
+  # 4. Robots — compara la familia de productos, es la página más densa
   - action: click
     selector: 'a[href="/conoce-robots"]'
     timeout: 10000
@@ -43,8 +58,11 @@ steps:
     xpath: "//h1[contains(., 'Conoce a nuestros robots')]"
     timeout: 15000
     description: "Robots: H1 visible"
+  - action: wait
+    value: "6000-14000"
+    description: "Compara los robots del catálogo"
 
-  # 5. Contacto / demo
+  # 5. Contacto — la conversión, mira el formulario antes de decidir
   - action: click
     selector: 'a[href="/contactos"]'
     timeout: 10000
@@ -53,3 +71,6 @@ steps:
     xpath: "//h1[contains(., 'Agenda tu demo')]"
     timeout: 15000
     description: "Contacto: H1 de agenda demo"
+  - action: wait
+    value: "3000-7000"
+    description: "Evalúa el formulario antes de agendar"

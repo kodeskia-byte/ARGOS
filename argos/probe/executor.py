@@ -1,3 +1,4 @@
+import random
 import time
 import os
 import traceback
@@ -164,5 +165,18 @@ class FlowExecutor:
             )
 
         elif step.action == ActionType.WAIT:
-            if step.value:
-                time.sleep(int(step.value) / 1000.0)
+            time.sleep(self._think_time(step))
+
+    @staticmethod
+    def _think_time(step: Step) -> float:
+        """Acepta '5000' o un rango '3000-8000' en ms.
+
+        El rango se sortea en cada iteración: con una pausa fija todas las
+        sondas caen en lockstep y golpean el sitio en oleadas sincronizadas
+        que no se parecen a usuarios reales.
+        """
+        raw = str(step.value or "0").strip()
+        if "-" in raw:
+            low, high = (float(part) for part in raw.split("-", 1))
+            return random.uniform(min(low, high), max(low, high)) / 1000.0
+        return float(raw) / 1000.0
