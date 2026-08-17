@@ -1,0 +1,19 @@
+# Entorno virtual
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Datos de ejecución del collector (SQLite + evidencias)
+data/
+*.db
+
+# Resultados locales de las corridas (pantallazos, DOM, métricas)
+results/
+
+# Logs
+*.log

@@ -1,0 +1,55 @@
+name: "Zentriks — journey comercial 5 páginas"
+description: >
+  Visitante profesional: home → beneficios → peak → robots → contacto.
+  Navega por el menú real y valida el H1 de cada página.
+
+steps:
+  # 1. Home
+  - action: open_url
+    value: "https://www.zentriks.cl/"
+    timeout: 30000
+    description: "Abrir home Zentriks"
+  - action: assert
+    xpath: "//h1[contains(., 'Pon tu plataforma al límite')]"
+    timeout: 15000
+    description: "Home: H1 de propuesta de valor"
+
+  # 2. Beneficios
+  - action: click
+    selector: 'a[href="/beneficios"]'
+    timeout: 10000
+    description: "Ir a Beneficios"
+  - action: assert
+    xpath: "//h1[contains(., 'El robot que pone tu plataforma al límite')]"
+    timeout: 15000
+    description: "Beneficios: H1 visible"
+
+  # 3. Peak
+  - action: click
+    selector: 'a[href="/peak"]'
+    timeout: 10000
+    description: "Ir a Peak"
+  - action: assert
+    xpath: "//h1[contains(., 'Tu plataforma soporta')]"
+    timeout: 15000
+    description: "Peak: H1 visible"
+
+  # 4. Robots
+  - action: click
+    selector: 'a[href="/conoce-robots"]'
+    timeout: 10000
+    description: "Ir a familia de robots"
+  - action: assert
+    xpath: "//h1[contains(., 'Conoce a nuestros robots')]"
+    timeout: 15000
+    description: "Robots: H1 visible"
+
+  # 5. Contacto / demo
+  - action: click
+    selector: 'a[href="/contactos"]'
+    timeout: 10000
+    description: "Ir a Contacto"
+  - action: assert
+    xpath: "//h1[contains(., 'Agenda tu demo')]"
+    timeout: 15000
+    description: "Contacto: H1 de agenda demo"

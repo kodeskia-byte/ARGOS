@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ARGOS · Live Room</title>
+<style>
+  :root{
+    --blue:#1263f5; --blue-dark:#0b3f9e; --blue-soft:#eaf1ff; --blue-line:#cddffd;
+    --ink:#0d1b2a; --muted:#5b6b80; --line:#e3e9f2; --bg:#f5f8fd; --card:#fff;
+    --ok:#0f9d58; --warn:#e8a33d; --bad:#dc3545; --radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 "Segoe UI",Inter,system-ui,-apple-system,Roboto,Arial,sans-serif}
+  a{color:var(--blue);text-decoration:none}
+  header{background:linear-gradient(115deg,#0b3f9e,#1263f5 55%,#3f8bff);color:#fff;
+    padding:22px 28px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+  header h1{margin:0;font-size:21px;letter-spacing:.16em;font-weight:700}
+  header .tag{font-size:12px;opacity:.85;letter-spacing:.04em}
+  nav{margin-left:auto;display:flex;gap:8px}
+  nav button{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);color:#fff;
+    padding:8px 16px;border-radius:999px;cursor:pointer;font-size:14px}
+  nav button.active{background:#fff;color:var(--blue-dark);font-weight:600;border-color:#fff}
+  main{max-width:1280px;margin:0 auto;padding:26px 22px 70px}
+  h2{font-size:20px;margin:0 0 4px}
+  h3{font-size:15px;margin:0 0 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .muted{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .hidden{display:none}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px 20px;box-shadow:0 1px 3px rgba(13,27,42,.05)}
+  .grid{display:grid;gap:16px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:14px;margin-bottom:20px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+  .kpi .label{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
+  .kpi .value{font-size:26px;font-weight:700;margin-top:4px}
+  .kpi .value.ok{color:var(--ok)} .kpi .value.bad{color:var(--bad)} .kpi .value.blue{color:var(--blue)}
+  .kpi .sub{font-size:12px;color:var(--muted)}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+  .inst{cursor:pointer;transition:border-color .15s, transform .15s}
+  .inst:hover{border-color:var(--blue);transform:translateY(-2px)}
+  .inst .top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+  .inst .name{font-weight:700;font-size:16px}
+  .pill{font-size:11px;padding:3px 10px;border-radius:999px;font-weight:600;letter-spacing:.04em}
+  .pill.on{background:#e5f6ec;color:var(--ok)} .pill.off{background:#eef1f6;color:var(--muted)}
+  .pill.err{background:#fdeaec;color:var(--bad)} .pill.warn{background:#fdf3e2;color:#a9701a}
+  .pill.blue{background:var(--blue-soft);color:var(--blue-dark)}
+  .rows{display:grid;grid-template-columns:1fr 1fr;gap:4px 14px;font-size:13px;margin-top:8px}
+  .rows span{color:var(--muted)} .rows b{font-weight:600}
+  .meter{margin-top:10px}
+  .meter .lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:3px}
+  .bar{height:7px;background:#eef2f8;border-radius:99px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--blue);border-radius:99px}
+  .bar i.warn{background:var(--warn)} .bar i.bad{background:var(--bad)}
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+  select,.btn{font:inherit;border:1px solid var(--line);background:#fff;color:var(--ink);
+    padding:9px 15px;border-radius:10px;cursor:pointer}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
+  .btn.ghost{background:transparent}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child,th.l,td.l{text-align:left}
+  thead th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    background:#fafcff;position:sticky;top:0}
+  tbody tr:hover{background:#fafcff}
+  tr.slow{background:#fff8ec} tr.slow:hover{background:#fdf1dc}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:#fff}
+  .chart{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
+  .chart h4{margin:0 0 2px;font-size:14px} .chart p{margin:0 0 10px;font-size:12px;color:var(--muted)}
+  .chart svg{width:100%;height:auto;display:block}
+  .neck{border-left:5px solid var(--warn);background:linear-gradient(90deg,#fff9ef,#fff);
+    border-radius:var(--radius);border:1px solid var(--line);padding:16px 20px;margin-bottom:20px}
+  .neck .h{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:#a9701a;font-weight:700}
+  .neck .t{font-size:18px;font-weight:700;margin:4px 0}
+  .neck .d{font-size:13px;color:var(--muted)}
+  .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .shot{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
+  .shot img{width:100%;height:150px;object-fit:cover;object-position:top;display:block;background:#f0f4fa}
+  .shot .meta{padding:10px 12px;font-size:12px}
+  .shot .meta .err{color:var(--bad);word-break:break-word;max-height:56px;overflow:hidden;margin-top:4px}
+  .sonda{margin-bottom:14px}
+  .sonda summary{cursor:pointer;padding:14px 18px;list-style:none;display:flex;
+    align-items:center;gap:12px;flex-wrap:wrap;font-weight:600}
+  .sonda summary::-webkit-details-marker{display:none}
+  .sonda summary:before{content:"▸";color:var(--blue);font-weight:400}
+  .sonda[open] summary:before{content:"▾"}
+  .sonda .body{padding:0 18px 18px}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+  .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>ARGOS</h1>
+    <div class="tag">Live Room · monitoreo de sondas y carga</div>
+  </div>
+  <nav>
+    <button data-view="live" class="active">Sesión en vivo</button>
+    <button data-view="runs">Ejecuciones</button>
+  </nav>
+</header>
+
+<main>
+  <section id="view-live">
+    <h2>Sesión en vivo</h2>
+    <p class="muted" id="live-sub">Esperando generadores…</p>
+    <div id="live-kpis" class="kpis"></div>
+    <h3>Generadores</h3>
+    <div id="instances" class="cards"></div>
+  </section>
+
+  <section id="view-runs" class="hidden">
+    <h2>Ejecuciones por fecha y hora</h2>
+    <p class="muted">Cada corrida queda registrada con su fecha, hora de inicio y métricas completas.</p>
+    <div class="toolbar">
+      <label for="date-select" class="muted" style="margin:0">Fecha</label>
+      <select id="date-select"></select>
+    </div>
+    <div id="runs-list"></div>
+  </section>
+
+  <section id="view-detail" class="hidden">
+    <div class="toolbar">
+      <button class="btn ghost" id="back-btn" type="button">← Volver</button>
+      <a class="btn primary" id="pdf-link" href="#">Informe PDF</a>
+      <a class="btn" id="html-link" href="#" target="_blank" rel="noopener">Vista informe</a>
+    </div>
+    <h2 id="detail-title">Ejecución</h2>
+    <p class="muted" id="detail-sub"></p>
+    <div id="detail-kpis" class="kpis"></div>
+    <div id="detail-neck"></div>
+    <div class="grid" id="detail-charts"
+         style="grid-template-columns:repeat(auto-fit,minmax(430px,1fr));margin-bottom:22px"></div>
+    <h3>Métricas de carga</h3>
+    <div class="scroll" id="detail-metrics" style="margin-bottom:26px"></div>
+    <h3>Recursos del generador</h3>
+    <div class="scroll" id="detail-resources" style="margin-bottom:26px;max-width:660px"></div>
+    <h3>Pasos del flujo</h3>
+    <div class="scroll" id="detail-steps" style="margin-bottom:26px"></div>
+    <h3>Evidencias de error</h3>
+    <div id="detail-shots" style="margin-bottom:26px"></div>
+    <h3>Detalle por sonda</h3>
+    <div id="detail-sondas"></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let view = "live";
+let origin = "live";     // vista desde la que se abrió el detalle
+let current = null;      // {instance, run}
+let timer = null;
+const STATUS = {running:"EN LÍNEA", finished:"FINALIZADO", offline:"SIN CONEXIÓN"};
+
+/* ---------- formatters ---------- */
+const nf = new Intl.NumberFormat("es-CL");
+function ms(v){
+  if(v === null || v === undefined) return "—";
+  const s = v / 1000;
+  return (s > 0 && s < 0.01 ? s.toFixed(3) : s.toFixed(2)) + " s";
+}
+function pct(v){ return v === null || v === undefined ? "—" : (v*100).toFixed(1) + "%"; }
+function bytes(v){
+  if(v === null || v === undefined) return "—";
+  if(v >= 1048576) return (v/1048576).toFixed(1) + " MB";
+  if(v >= 1024) return (v/1024).toFixed(0) + " KB";
+  return Math.round(v) + " B";
+}
+function clock(iso){
+  if(!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString("es-CL", {hour12:false});
+}
+function stamp(iso){
+  if(!iso) return "—";
+  const d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString("es-CL", {hour12:false});
+}
+function esc(s){
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+const P = (stats, key) => (stats && stats.percentiles) ? stats.percentiles[key] : null;
+
+function kpi(label, value, sub, tone){
+  return `<div class="kpi"><div class="label">${esc(label)}</div>
+    <div class="value ${tone||""}">${value}</div>
+    ${sub ? `<div class="sub">${esc(sub)}</div>` : ""}</div>`;
+}
+function meter(label, value, text){
+  if(value === null || value === undefined) return "";
+  const v = Math.max(0, Math.min(100, value));
+  const tone = v >= 90 ? "bad" : v >= 70 ? "warn" : "";
+  return `<div class="meter"><div class="lbl"><span>${esc(label)}</span>
+    <span>${esc(text ?? v.toFixed(0) + "%")}</span></div>
+    <div class="bar"><i class="${tone}" style="width:${v}%"></i></div></div>`;
+}
+
+/* ---------- charts (inline SVG, sin dependencias) ---------- */
+const W = 760, H = 250, PAD = {t:14, r:16, b:34, l:52};
+
+function axis(minY, maxY, unit){
+  let out = "";
+  for(let i = 0; i <= 4; i++){
+    const y = PAD.t + (H - PAD.t - PAD.b) * (i/4);
+    const val = maxY - (maxY - minY) * (i/4);
+    out += `<line x1="${PAD.l}" y1="${y}" x2="${W-PAD.r}" y2="${y}" stroke="#eef2f8"/>`;
+    out += `<text x="${PAD.l-8}" y="${y+4}" text-anchor="end" font-size="11" fill="#5b6b80">${unit(val)}</text>`;
+  }
+  return out;
+}
+
+function lineChart(series, opts){
+  opts = opts || {};
+  const all = series.flatMap(s => s.values).filter(v => v !== null && v !== undefined);
+  if(!all.length) return `<div class="empty">Sin datos</div>`;
+  const maxY = opts.max ?? (Math.max(...all) * 1.15 || 1);
+  const minY = 0;
+  const n = Math.max(...series.map(s => s.values.length));
+  const x = i => PAD.l + (W - PAD.l - PAD.r) * (n <= 1 ? 0.5 : i/(n-1));
+  const y = v => PAD.t + (H - PAD.t - PAD.b) * (1 - (v - minY)/(maxY - minY || 1));
+  const unit = opts.unit || (v => Math.round(v));
+
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img">${axis(minY, maxY, unit)}`;
+  series.forEach(s => {
+    const pts = s.values.map((v,i) => v === null || v === undefined ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)
+                        .filter(Boolean);
+    if(!pts.length) return;
+    if(s.fill){
+      out += `<polygon points="${x(0).toFixed(1)},${H-PAD.b} ${pts.join(" ")} ${x(s.values.length-1).toFixed(1)},${H-PAD.b}"
+              fill="${s.color}" opacity=".10"/>`;
+    }
+    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="${s.color}"
+            stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  });
+  (opts.markers || []).forEach(m => {
+    out += `<circle cx="${x(m.i).toFixed(1)}" cy="${y(m.v).toFixed(1)}" r="3.5" fill="#dc3545"/>`;
+  });
+  (opts.xLabels || []).forEach(l => {
+    out += `<text x="${x(l.i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="11" fill="#5b6b80">${esc(l.text)}</text>`;
+  });
+  out += `</svg>`;
+  if(opts.legend){
+    out += `<div class="legend">` + series.map(s =>
+      `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("") + `</div>`;
+  }
+  return out;
+}
+
+function barChart(items, opts){
+  opts = opts || {};
+  if(!items.length) return `<div class="empty">Sin datos</div>`;
+  const rowH = 30, top = 8;
+  const height = top + items.length * rowH + 8;
+  const labelW = 210, right = 70;
+  const max = Math.max(...items.map(i => i.value)) || 1;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    const w = (W - labelW - right) * (it.value / max);
+    out += `<text x="0" y="${y+16}" font-size="12" fill="#0d1b2a">${esc(it.label.slice(0,32))}</text>`;
+    out += `<rect x="${labelW}" y="${y+4}" width="${W-labelW-right}" height="16" rx="4" fill="#f1f5fb"/>`;
+    out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,w).toFixed(1)}" height="16" rx="4"
+            fill="${it.color || "#1263f5"}"/>`;
+    out += `<text x="${W-6}" y="${y+17}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(it.text)}</text>`;
+  });
+  out += `</svg>`;
+  return out;
+}
+
+function chartCard(title, subtitle, body){
+  return `<div class="chart"><h4>${esc(title)}</h4><p>${esc(subtitle)}</p>${body}</div>`;
+}
+
+/* ---------- vista: sesión en vivo ---------- */
+async function loadLive(){
+  const data = await fetch("/api/live").then(r => r.json()).catch(() => null);
+  if(!data) return;
+  $("live-sub").textContent =
+    `${data.online_instances} generador(es) en línea · ${nf.format(data.total_users)} usuarios virtuales · ` +
+    `actualizado ${clock(data.generated_at)}`;
+  $("live-kpis").innerHTML =
+    kpi("Usuarios virtuales", nf.format(data.total_users), "sondas concurrentes", "blue") +
+    kpi("Journeys", nf.format(data.iterations), "flujos completos") +
+    kpi("Correctos", nf.format(data.ok), null, "ok") +
+    kpi("Incorrectos", nf.format(data.fail), null, data.fail ? "bad" : "") +
+    kpi("Tasa de error", pct(data.error_rate), null, data.error_rate > 0.05 ? "bad" : "ok") +
+    kpi("P95 flujo", ms(data.p95_ms), "peor generador");
+
+  if(!data.instances.length){
+    $("instances").innerHTML = `<div class="card empty">Sin generadores registrados todavía.</div>`;
+    return;
+  }
+  $("instances").innerHTML = data.instances.map(inst => {
+    const r = inst.resources || {};
+    const memText = r.mem_used_mb ? `${Math.round(r.mem_used_mb)} / ${Math.round(r.mem_total_mb||0)} MB` : null;
+    return `<div class="card inst" data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}">
+      <div class="top">
+        <span class="name">${esc(inst.instance_id)}</span>
+        <span class="pill ${inst.online ? "on" : "off"}">${esc(STATUS[inst.status] || inst.status)}</span>
+      </div>
+      <div class="muted" style="margin:0 0 6px">${esc(inst.flow || "—")} · ${esc(inst.run_id || "")}</div>
+      <div class="rows">
+        <span>Usuarios</span><b>${nf.format(inst.users)}</b>
+        <span>Journeys</span><b>${nf.format(inst.iterations)}</b>
+        <span>OK / FAIL</span><b>${nf.format(inst.ok)} / ${nf.format(inst.fail)}</b>
+        <span>P50 / P95</span><b>${ms(inst.p50_ms)} / ${ms(inst.p95_ms)}</b>
+        <span>Sondas activas</span><b>${nf.format((inst.probes||[]).length)}</b>
+        <span>Visto</span><b>${clock(inst.last_seen)}</b>
+      </div>
+      ${meter("CPU del generador", r.cpu_percent, r.cpu_percent != null ? r.cpu_percent + "%" : null)}
+      ${meter("Memoria", r.mem_percent, memText)}
+      ${r.browser_processes ? `<div class="legend"><span>${nf.format(r.browser_processes)} procesos de navegador · carga ${r.load1 ?? "—"}</span></div>` : ""}
+      ${inst.last_error ? `<div class="legend" style="color:var(--bad)">${esc(String(inst.last_error).slice(0,120))}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  document.querySelectorAll(".inst").forEach(el => {
+    el.onclick = () => openDetail(el.dataset.instance, el.dataset.run);
+  });
+}
+
+/* ---------- vista: ejecuciones ---------- */
+async function loadDates(){
+  const data = await fetch("/api/runs").then(r => r.json()).catch(() => ({dates:[]}));
+  const sel = $("date-select");
+  const dates = data.dates || [];
+  if(!dates.length){
+    sel.innerHTML = `<option>Sin ejecuciones</option>`;
+    $("runs-list").innerHTML = `<div class="card empty">Todavía no hay ejecuciones registradas.</div>`;
+    return;
+  }
+  const keep = sel.value;
+  sel.innerHTML = dates.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join("");
+  sel.value = dates.includes(keep) ? keep : dates[0];
+  loadRuns(sel.value);
+}
+
+async function loadRuns(date){
+  const data = await fetch("/api/runs?date=" + encodeURIComponent(date)).then(r => r.json());
+  const items = data.items || [];
+  if(!items.length){
+    $("runs-list").innerHTML = `<div class="card empty">Sin ejecuciones en ${esc(date)}.</div>`;
+    return;
+  }
+  const total = items.reduce((a,i) => a + i.iterations, 0);
+  const okAll = items.reduce((a,i) => a + i.successes, 0);
+  $("runs-list").innerHTML =
+    `<div class="kpis">
+      ${kpi("Ejecuciones", items.length, date)}
+      ${kpi("Journeys", nf.format(total))}
+      ${kpi("Éxito", total ? pct(okAll/total) : "—", null, "ok")}
+      ${kpi("Generadores", new Set(items.map(i => i.instance_id)).size)}
+     </div>
+     <div class="cards">` +
+    items.map(run => `
+      <div class="card inst" data-instance="${esc(run.instance_id)}" data-run="${esc(run.run_id)}">
+        <div class="top">
+          <span class="name">${clock(run.started_at)}</span>
+          <span class="pill ${run.finished ? "blue" : "warn"}">${run.finished ? "FINALIZADA" : "EN CURSO"}</span>
+        </div>
+        <div class="muted" style="margin:0 0 6px">${esc(run.instance_id)} · ${esc(run.flow || "flujo")}</div>
+        <div class="rows">
+          <span>Journeys</span><b>${nf.format(run.iterations)}</b>
+          <span>Sondas</span><b>${nf.format(run.sondas || run.users || 0)}</b>
+          <span>OK / FAIL</span><b>${nf.format(run.successes)} / ${nf.format(run.failures)}</b>
+          <span>Éxito</span><b>${pct(run.success_rate)}</b>
+          <span>P50 / P95</span><b>${ms(run.p50_ms)} / ${ms(run.p95_ms)}</b>
+          <span>Fin</span><b>${run.ended_at ? clock(run.ended_at) : "—"}</b>
+        </div>
+      </div>`).join("") + `</div>`;
+
+  document.querySelectorAll("#runs-list .inst").forEach(el => {
+    el.onclick = () => openDetail(el.dataset.instance, el.dataset.run);
+  });
+}
+
+/* ---------- vista: detalle de ejecución ---------- */
+const METRICS = [
+  ["Duración del flujo", "flow_ms", ms],
+  ["TTFB", "ttfb_ms", ms],
+  ["DOMContentLoaded", "dom_content_loaded_ms", ms],
+  ["Load", "load_ms", ms],
+  ["Peso del DOM", "dom_size_bytes", bytes],
+  ["Nodos del DOM", "dom_node_count", (v) => v == null ? "—" : nf.format(Math.round(v))],
+];
+
+const RESOURCES = [
+  ["CPU", "cpu_percent", (v) => v.toFixed(0) + "%"],
+  ["Memoria", "mem_percent", (v) => v.toFixed(0) + "%"],
+  ["Memoria usada", "mem_used_mb", (v) => nf.format(Math.round(v)) + " MB"],
+  ["Procesos de navegador", "browser_processes", (v) => nf.format(v)],
+  ["Carga del sistema", "load1", (v) => v.toFixed(2)],
+];
+
+function metricsTable(source){
+  const rows = METRICS.filter(([, key]) => source[key]);
+  if(!rows.length) return `<div class="empty">Sin métricas registradas.</div>`;
+  return `<table><thead><tr><th class="l">Métrica</th><th>Muestras</th><th>Mín</th><th>Prom</th>
+    <th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>Máx</th></tr></thead><tbody>` +
+    rows.map(([label, key, fmt]) => {
+      const s = source[key];
+      return `<tr><td class="l"><b>${esc(label)}</b></td><td>${nf.format(s.count)}</td>
+        <td>${fmt(s.min)}</td><td><b>${fmt(s.avg)}</b></td>
+        <td>${fmt(P(s,"p50"))}</td><td>${fmt(P(s,"p90"))}</td>
+        <td>${fmt(P(s,"p95"))}</td><td>${fmt(P(s,"p99"))}</td>
+        <td>${fmt(s.max)}</td></tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+function resourcesTable(samples){
+  const rows = RESOURCES.map(([label, key, fmt]) => {
+    const values = samples.map(s => s[key]).filter(v => v !== null && v !== undefined);
+    if(!values.length) return null;
+    const avg = values.reduce((a,b) => a + b, 0) / values.length;
+    return `<tr><td class="l"><b>${esc(label)}</b></td><td>${fmt(Math.min(...values))}</td>
+      <td><b>${fmt(avg)}</b></td><td>${fmt(Math.max(...values))}</td></tr>`;
+  }).filter(Boolean);
+  if(!rows.length)
+    return `<div class="empty">Sin muestras de recursos en esta ejecución.</div>`;
+  return `<table><thead><tr><th class="l">Recurso</th><th>Mín</th><th>Prom</th><th>Máx</th>
+    </tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function stepsTable(steps){
+  if(!steps || !steps.length) return `<div class="empty">Sin pasos registrados.</div>`;
+  return `<table><thead><tr>
+    <th class="l">#</th><th class="l">Paso</th><th class="l">Acción</th>
+    <th>Ejec.</th><th>OK</th><th>FAIL</th>
+    <th>Mín</th><th>Prom</th><th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>Máx</th>
+    <th>% flujo</th></tr></thead><tbody>` +
+    steps.map(s => {
+      const d = s.duration_ms;
+      return `<tr class="${s.bottleneck ? "slow" : ""}">
+        <td class="l">${s.step_index}</td>
+        <td class="l">${esc(s.label)} ${s.bottleneck ? '<span class="pill warn">cuello</span>' : ""}</td>
+        <td class="l"><span class="pill blue">${esc(s.action)}</span></td>
+        <td>${nf.format(s.runs)}</td>
+        <td style="color:var(--ok)">${nf.format(s.ok)}</td>
+        <td style="color:${s.fail ? "var(--bad)" : "var(--muted)"}">${nf.format(s.fail)}</td>
+        <td>${ms(d && d.min)}</td><td><b>${ms(d && d.avg)}</b></td>
+        <td>${ms(P(d,"p50"))}</td><td>${ms(P(d,"p90"))}</td>
+        <td>${ms(P(d,"p95"))}</td><td>${ms(P(d,"p99"))}</td>
+        <td>${ms(d && d.max)}</td>
+        <td>${s.share_pct.toFixed(1)}%</td>
+      </tr>`;
+    }).join("") + `</tbody></table>`;
+}
+
+function shotsGrid(shots){
+  if(!shots || !shots.length)
+    return `<div class="card empty">Sin errores capturados en esta ejecución.</div>`;
+  return `<div class="shots">` + shots.map(s => `
+    <div class="shot">
+      ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener"><img src="${esc(s.url)}" alt="Error paso ${s.step_index}" loading="lazy"></a>`
+              : `<div class="empty" style="height:150px">sin imagen</div>`}
+      <div class="meta">
+        <b>${esc(s.probe_id)}</b> · paso ${s.step_index} · ${clock(s.at)}<br>
+        <span class="pill err">${esc(s.error_type || "Error")}</span> ${esc(s.label)}
+        <div class="err">${esc(String(s.error || "").slice(0,180))}</div>
+        ${s.dom_url ? `<a href="${esc(s.dom_url)}" target="_blank" rel="noopener">Ver DOM capturado</a>` : ""}
+      </div>
+    </div>`).join("") + `</div>`;
+}
+
+function renderCharts(stats){
+  const cards = [];
+
+  const tl = stats.timeline || [];
+  if(tl.length){
+    const markers = tl.map((p,i) => p.ok ? null : {i, v:p.ms}).filter(Boolean);
+    const labels = tl.length > 1
+      ? [{i:0, text:clock(tl[0].t)}, {i:tl.length-1, text:clock(tl[tl.length-1].t)}]
+      : [];
+    cards.push(chartCard(
+      "Duración del flujo en el tiempo",
+      "Cada punto es un journey completo; en rojo los que fallaron.",
+      lineChart([{label:"Duración", values: tl.map(p => p.ms), color:"#1263f5", fill:true}],
+                {unit: v => (v/1000).toFixed(1) + " s", markers, xLabels: labels})
+    ));
+  }
+
+  const steps = (stats.steps || []).filter(s => s.runs);
+  if(steps.length){
+    cards.push(chartCard(
+      "Tiempo por paso · dónde se va el flujo",
+      "Barra = p95 del paso; la barra ámbar es el cuello de botella.",
+      barChart(steps.map(s => ({
+        label: `${s.step_index}. ${s.label}`,
+        value: s.p95_ms || s.avg_ms || 0,
+        color: s.bottleneck ? "#e8a33d" : "#1263f5",
+        text: `p95 ${ms(s.p95_ms)} · prom ${ms(s.avg_ms)}`
+      })))
+    ));
+  }
+
+  const errors = Object.entries(stats.error_types || {}).sort((a,b) => b[1]-a[1]);
+  cards.push(chartCard(
+    "Tipos de error",
+    errors.length ? `${nf.format(stats.fail)} journeys incorrectos` : "Sin errores registrados.",
+    errors.length
+      ? barChart(errors.map(([k,v]) => ({label:k, value:v, color:"#dc3545", text:nf.format(v)})))
+      : `<div class="empty">Todos los flujos terminaron correctos.</div>`
+  ));
+
+  const res = stats.resources || [];
+  if(res.length){
+    cards.push(chartCard(
+      "Recursos del generador",
+      `CPU y memoria del servidor que hospeda las sondas · último: ` +
+      `${res[res.length-1].cpu_percent ?? "—"}% CPU, ${res[res.length-1].mem_percent ?? "—"}% RAM, ` +
+      `${res[res.length-1].browser_processes ?? "—"} procesos de navegador`,
+      lineChart([
+        {label:"CPU %", values: res.map(r => r.cpu_percent), color:"#1263f5", fill:true},
+        {label:"Memoria %", values: res.map(r => r.mem_percent), color:"#0f9d58"}
+      ], {max:100, unit: v => Math.round(v) + "%", legend:true,
+          xLabels:[{i:0, text:clock(res[0].ts)}, {i:res.length-1, text:clock(res[res.length-1].ts)}]})
+    ));
+  }
+  $("detail-charts").innerHTML = cards.join("");
+}
+
+function renderNeck(stats){
+  const b = stats.bottleneck;
+  if(!b){ $("detail-neck").innerHTML = ""; return; }
+  $("detail-neck").innerHTML = `<div class="neck">
+    <div class="h">Cuello de botella detectado</div>
+    <div class="t">Paso ${b.step_index} · ${esc(b.label)}</div>
+    <div class="d">Este paso ${esc(b.reason)}. Máximo observado ${ms(b.max_ms)}.</div>
+  </div>`;
+}
+
+function renderSondas(stats){
+  const probes = stats.probes || [];
+  if(!probes.length){ $("detail-sondas").innerHTML = `<div class="card empty">Sin sondas.</div>`; return; }
+  $("detail-sondas").innerHTML = probes.map(p => `
+    <details class="card sonda">
+      <summary>
+        ${esc(p.probe_id)}
+        <span class="pill ${p.fail ? "err" : "on"}">${nf.format(p.ok)} OK / ${nf.format(p.fail)} FAIL</span>
+        <span class="pill blue">${nf.format(p.journeys)} journeys</span>
+        <span class="pill blue">${nf.format(p.navigations)} navegaciones</span>
+        <span style="margin-left:auto;font-weight:400;color:var(--muted);font-size:13px">
+          prom ${ms(p.flow_ms && p.flow_ms.avg)} · p95 ${ms(P(p.flow_ms,"p95"))} · máx ${ms(p.flow_ms && p.flow_ms.max)}
+        </span>
+      </summary>
+      <div class="body">
+        <div class="kpis" style="margin-bottom:14px">
+          ${kpi("Éxito", pct(p.success_rate), null, p.fail ? "bad" : "ok")}
+          ${kpi("Navegaciones", nf.format(p.navigations),
+                `${nf.format(p.clicks)} clicks · ${nf.format(p.asserts)} validaciones`)}
+          ${kpi("Cuello", p.bottleneck ? "Paso " + p.bottleneck.step_index : "—",
+                p.bottleneck ? p.bottleneck.label : null, "blue")}
+        </div>
+        <div class="scroll" style="margin-bottom:14px">${metricsTable(p)}</div>
+        <div class="scroll">${stepsTable(p.steps)}</div>
+      </div>
+    </details>`).join("");
+}
+
+async function openDetail(instance, run){
+  current = {instance, run};
+  origin = view;
+  switchView("detail");
+  await loadDetail();
+}
+
+async function loadDetail(){
+  if(!current) return;
+  const qs = `instance=${encodeURIComponent(current.instance)}&run=${encodeURIComponent(current.run)}`;
+  const data = await fetch("/api/run?" + qs).then(r => r.json()).catch(() => null);
+  if(!data) return;
+  const s = data.stats || {};
+  $("pdf-link").href = "/informe.pdf?" + qs;
+  $("html-link").href = "/informe?" + qs;
+  $("detail-title").textContent = `${current.instance} · ${current.run}`;
+  $("detail-sub").textContent =
+    `Inicio ${stamp(s.started_at)} · ${s.ended_at ? "fin " + stamp(s.ended_at) : "en curso"} · ` +
+    `flujo ${s.flow || "—"} · ${nf.format(s.sondas || 0)} sondas`;
+
+  if(!s.journeys){
+    $("detail-kpis").innerHTML = "";
+    $("detail-neck").innerHTML = "";
+    $("detail-charts").innerHTML = `<div class="card empty">Aún no llegan journeys de esta corrida.</div>`;
+    $("detail-metrics").innerHTML = "";
+    $("detail-resources").innerHTML = "";
+    $("detail-steps").innerHTML = "";
+    $("detail-shots").innerHTML = "";
+    $("detail-sondas").innerHTML = "";
+    return;
+  }
+
+  const f = s.flow_ms || {};
+  $("detail-kpis").innerHTML =
+    kpi("Journeys", nf.format(s.journeys), `${nf.format(s.sondas)} sondas`, "blue") +
+    kpi("Flujos correctos", nf.format(s.ok), pct(s.success_rate), "ok") +
+    kpi("Flujos incorrectos", nf.format(s.fail), pct(1 - s.success_rate), s.fail ? "bad" : "") +
+    kpi("Navegaciones", nf.format(s.navigations), `${nf.format(s.clicks)} clicks · ${nf.format(s.asserts)} validaciones`) +
+    kpi("Mín / Prom / Máx", ms(f.avg), `${ms(f.min)} — ${ms(f.max)}`) +
+    kpi("P95 flujo", ms(P(f,"p95")), `p50 ${ms(P(f,"p50"))} · p99 ${ms(P(f,"p99"))}`) +
+    kpi("TTFB p95", ms(P(s.ttfb_ms,"p95")), `prom ${ms(s.ttfb_ms && s.ttfb_ms.avg)}`) +
+    kpi("Peso DOM", bytes(s.dom_size_bytes && s.dom_size_bytes.avg),
+        s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null);
+
+  renderNeck(s);
+  renderCharts(s);
+  $("detail-metrics").innerHTML = metricsTable(s);
+  $("detail-resources").innerHTML = resourcesTable(s.resources || []);
+  $("detail-steps").innerHTML = stepsTable(s.steps);
+  $("detail-shots").innerHTML = shotsGrid(s.failed_screenshots);
+  renderSondas(s);
+}
+
+/* ---------- navegación ---------- */
+function switchView(next){
+  view = next;
+  ["live","runs","detail"].forEach(v => $("view-" + v).classList.toggle("hidden", v !== next));
+  document.querySelectorAll("nav button").forEach(b =>
+    b.classList.toggle("active", b.dataset.view === next));
+  if(timer) clearInterval(timer);
+  if(next === "live"){ loadLive(); timer = setInterval(loadLive, 3000); }
+  if(next === "runs"){ loadDates(); }
+  if(next === "detail"){ timer = setInterval(loadDetail, 5000); }
+}
+
+document.querySelectorAll("nav button").forEach(b => {
+  b.onclick = () => switchView(b.dataset.view);
+});
+$("back-btn").onclick = () => switchView(origin === "detail" ? "runs" : origin);
+$("date-select").onchange = (e) => loadRuns(e.target.value);
+switchView("live");
+</script>
+</body>
+</html>
