@@ -12,10 +12,20 @@ VENV_DIR="$REPO_DIR/venv"
 WITH_COLLECTOR=0
 [[ "${1:-}" == "--with-collector" ]] && WITH_COLLECTOR=1
 
+# Muchos VPS entregan acceso root directo y no traen sudo instalado.
+if [[ "$(id -u)" == "0" ]]; then
+  SUDO=""
+  RUN_AS="${SUDO_USER:-root}"
+else
+  SUDO="sudo"
+  RUN_AS="$USER"
+fi
+
 echo "==> Paquetes del sistema"
-sudo apt-get update -qq
+export DEBIAN_FRONTEND=noninteractive
+$SUDO apt-get update -qq
 # fonts-dejavu-core es obligatorio: sin él el PDF pierde tildes y la ñ.
-sudo apt-get install -y -qq python3-venv python3-pip fonts-dejavu-core
+$SUDO apt-get install -y -qq python3-venv python3-pip fonts-dejavu-core git
 
 echo "==> Entorno virtual"
 [[ -d "$VENV_DIR" ]] || python3 -m venv "$VENV_DIR"
@@ -47,14 +57,14 @@ PY
 
 if [[ "$WITH_COLLECTOR" == "1" ]]; then
   echo "==> Servicio del collector"
-  sudo tee /etc/systemd/system/argos-collector.service >/dev/null <<EOF
+  $SUDO tee /etc/systemd/system/argos-collector.service >/dev/null <<EOF
 [Unit]
 Description=ARGOS collector (Live Room)
 After=network.target
 
 [Service]
 Type=simple
-User=$USER
+User=$RUN_AS
 WorkingDirectory=$REPO_DIR
 Environment=ARGOS_DB=$REPO_DIR/data/argos.db
 # Descomenta y define un token para exigir autenticación en los endpoints /ingest.
@@ -66,9 +76,9 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now argos-collector
-  sudo systemctl --no-pager status argos-collector | head -5
+  $SUDO systemctl daemon-reload
+  $SUDO systemctl enable --now argos-collector
+  $SUDO systemctl --no-pager status argos-collector | head -5
 fi
 
 echo
