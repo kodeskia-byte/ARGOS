@@ -249,6 +249,11 @@ function lineChart(series, opts){
   return out;
 }
 
+function clip(text, max){
+  text = String(text || "");
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
 function barChart(items, opts){
   opts = opts || {};
   if(!items.length) return `<div class="empty">Sin datos</div>`;
@@ -267,6 +272,32 @@ function barChart(items, opts){
     out += `<text x="${W-6}" y="${y+17}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(it.text)}</text>`;
   });
   out += `</svg>`;
+  return out;
+}
+
+function stackedBarChart(items){
+  if(!items.length) return `<div class="empty">Sin datos</div>`;
+  const rowH = 30, top = 8;
+  const height = top + items.length * rowH + 8;
+  const labelW = 190, right = 180;
+  const trackW = W - labelW - right;
+  const max = Math.max(...items.map(i => i.ok + i.fail)) || 1;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    // El total se pinta en rojo y el tramo correcto se superpone en verde:
+    // así el remanente rojo es exactamente la porción que falló.
+    const totalW = trackW * ((it.ok + it.fail) / max);
+    const okW = trackW * (it.ok / max);
+    out += `<text x="0" y="${y+16}" font-size="12" fill="#0d1b2a">${esc(clip(it.label, 27))}</text>`;
+    out += `<rect x="${labelW}" y="${y+4}" width="${trackW}" height="16" rx="4" fill="#f1f5fb"/>`;
+    out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,totalW).toFixed(1)}" height="16" rx="4" fill="#dc3545"/>`;
+    if(it.ok) out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,okW).toFixed(1)}" height="16" rx="4" fill="#0f9d58"/>`;
+    out += `<text x="${W-6}" y="${y+17}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(it.text)}</text>`;
+  });
+  out += `</svg>
+    <div class="legend"><span><i style="background:#0f9d58"></i>Correctos</span>
+    <span><i style="background:#dc3545"></i>Incorrectos</span></div>`;
   return out;
 }
 
@@ -492,6 +523,20 @@ function renderCharts(stats){
         value: s.p95_ms || s.avg_ms || 0,
         color: s.bottleneck ? "#e8a33d" : "#1263f5",
         text: `p95 ${ms(s.p95_ms)} · prom ${ms(s.avg_ms)}`
+      })))
+    ));
+
+    const failed = steps.filter(s => s.fail).length;
+    cards.push(chartCard(
+      "Pasos correctos e incorrectos",
+      failed ? `${failed} de ${steps.length} pasos registran fallos.`
+             : "Todos los pasos se ejecutaron sin fallos.",
+      stackedBarChart(steps.map(s => ({
+        label: `${s.step_index}. ${s.label}`,
+        ok: s.ok,
+        fail: s.fail,
+        text: s.fail ? `${nf.format(s.ok)} OK · ${nf.format(s.fail)} FAIL (${(s.fail_rate*100).toFixed(1)}%)`
+                     : `${nf.format(s.ok)} OK`
       })))
     ));
   }

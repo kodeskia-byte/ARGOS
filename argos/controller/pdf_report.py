@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 from typing import List, Optional
 
+from argos.controller import charts
+
 FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
@@ -50,6 +52,10 @@ def _pct(value: Optional[float]) -> str:
 
 def _count(value: Optional[float]) -> str:
     return "—" if value is None else f"{value:,.0f}".replace(",", ".")
+
+
+def _plural(value: Optional[float], singular: str, plural: Optional[str] = None) -> str:
+    return f"{_count(value)} {singular if value == 1 else plural or singular + 's'}"
 
 
 METRIC_ROWS = (
@@ -128,6 +134,191 @@ def _metrics_table_html(source: dict) -> str:
         "<th>Prom</th><th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>Máx</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
     )
+
+
+def _elapsed(started: Optional[str], ended: Optional[str]) -> str:
+    if not started or not ended:
+        return "—"
+    try:
+        seconds = (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds()
+    except ValueError:
+        return "—"
+    if seconds < 60:
+        return f"{seconds:.0f} s"
+    return f"{int(seconds // 60)} min {int(seconds % 60)} s"
+
+
+VERDICTS = ((0.99, "Estable", "ok"), (0.95, "Con observaciones", "warn"), (0.0, "Degradado", "bad"))
+
+
+def _summary_html(stats: dict) -> str:
+    """Párrafo de apertura: el cliente debe entender el resultado sin leer tablas."""
+    rate = stats.get("success_rate") or 0
+    label, tone = next((l, t) for threshold, l, t in VERDICTS if rate >= threshold)
+    flow = stats.get("flow_ms") or {}
+    sentences = [
+        f"Se ejecutaron {_count(stats.get('journeys'))} journeys completos con "
+        f"{stats.get('sondas') or 0} sondas en paralelo durante "
+        f"{_elapsed(stats.get('started_at'), stats.get('ended_at'))}, sumando "
+        f"{_count(stats.get('navigations'))} navegaciones, {_count(stats.get('clicks'))} clicks y "
+        f"{_count(stats.get('asserts'))} validaciones.",
+        f"El {_pct(rate)} de los flujos terminó correctamente.",
+    ]
+    if _p(flow, "p50") is not None:
+        sentences.append(
+            f"La mitad de los usuarios completó el recorrido en {_ms(_p(flow, 'p50'))} o menos y "
+            f"el 95% lo hizo bajo {_ms(_p(flow, 'p95'))}, con un peor caso de {_ms(flow.get('max'))}."
+        )
+    neck = stats.get("bottleneck")
+    if neck:
+        sentences.append(
+            f"El paso más lento es «{neck.get('label')}», que concentra el "
+            f"{neck.get('share_pct') or 0:.0f}% del tiempo total del flujo."
+        )
+    errors = stats.get("error_types") or {}
+    if errors:
+        worst = max(errors.items(), key=lambda kv: kv[1])
+        total = sum(errors.values())
+        sentences.append(
+            f"Se registró 1 error del tipo {worst[0]}." if total == 1 else
+            f"Se registraron {_count(total)} errores, principalmente del tipo {worst[0]}."
+        )
+    else:
+        sentences.append("No se registró ningún error durante la ejecución.")
+    cpu = [s["cpu_percent"] for s in (stats.get("resources") or []) if s.get("cpu_percent") is not None]
+    if cpu:
+        sentences.append(
+            f"El generador de carga promedió {sum(cpu) / len(cpu):.0f}% de CPU con un máximo de "
+            f"{max(cpu):.0f}%, por lo que los tiempos reflejan el sitio y no la sonda."
+            if max(cpu) < 90 else
+            f"El generador de carga llegó a {max(cpu):.0f}% de CPU: parte de los tiempos altos "
+            f"puede venir de la propia sonda y conviene repartir la carga en más instancias."
+        )
+    body = " ".join(html.escape(sentence) for sentence in sentences)
+    return (f"<section class='summary {tone}'><span>Resultado global · {html.escape(label)}</span>"
+            f"<p>{body}</p></section>")
+
+
+def _charts_html(stats: dict) -> str:
+    flow = stats.get("flow_ms") or {}
+    points = stats.get("timeline") or []
+    durations = [p["ms"] for p in points if p.get("ms") is not None]
+    steps = [s for s in (stats.get("steps") or []) if s.get("runs")]
+    errors = sorted((stats.get("error_types") or {}).items(), key=lambda kv: -kv[1])
+    probes = stats.get("probes") or []
+    samples = stats.get("resources") or []
+    cards = []
+
+    cards.append(charts.card(
+        "Duración del flujo durante la ejecución",
+        "Cada punto es un journey completo, en orden cronológico. Una línea plana indica que el "
+        "sitio aguantó la carga sin degradarse.",
+        charts.timeline(points, _ms, reference=_p(flow, "p95")),
+    ))
+
+    cards.append(charts.card(
+        "Distribución de los tiempos de respuesta",
+        "Cuántos journeys cayeron en cada rango de duración. Una cola larga a la derecha significa "
+        "que algunos usuarios esperaron mucho más que el promedio.",
+        charts.histogram(durations, _ms, markers=[
+            (_p(flow, "p50"), "p50", charts.BLUE),
+            (_p(flow, "p95"), "p95", charts.AMBER),
+        ]),
+    ))
+
+    ok, fail = stats.get("ok") or 0, stats.get("fail") or 0
+    if ok or fail:
+        cards.append(charts.card(
+            "Flujos correctos e incorrectos",
+            "Proporción de journeys que completaron el recorrido de punta a punta.",
+            charts.donut(
+                [{"label": "Flujos correctos", "value": ok, "color": charts.GREEN,
+                  "text": _plural(ok, "journey")},
+                 {"label": "Flujos incorrectos", "value": fail, "color": charts.RED,
+                  "text": _plural(fail, "journey")}],
+                center_value=_pct(stats.get("success_rate")), center_label="tasa de éxito",
+            ),
+        ))
+
+    if steps:
+        cards.append(charts.card(
+            "Dónde se va el tiempo del flujo",
+            "P95 de cada paso: el valor que no supera el 95% de las ejecuciones. La barra ámbar es "
+            "el cuello de botella.",
+            charts.hbars([{
+                "label": f"{s['step_index']}. {s.get('label') or ''}",
+                "value": s.get("p95_ms") or s.get("avg_ms") or 0,
+                "color": charts.AMBER if s.get("bottleneck") else charts.BLUE,
+                "text": f"p95 {_ms(s.get('p95_ms'))} · prom {_ms(s.get('avg_ms'))}",
+            } for s in steps]),
+        ))
+        cards.append(charts.card(
+            "Pasos correctos e incorrectos",
+            "Ejecuciones de cada paso. Cuando un paso falla, los siguientes se ejecutan menos veces "
+            "porque ese journey ya se cortó.",
+            charts.stacked_hbars([{
+                "label": f"{s['step_index']}. {s.get('label') or ''}",
+                "ok": s.get("ok") or 0,
+                "fail": s.get("fail") or 0,
+                "text": (f"{_count(s.get('ok'))} OK · {_count(s.get('fail'))} FAIL "
+                         f"({(s.get('fail_rate') or 0) * 100:.1f}%)"
+                         if s.get("fail") else f"{_count(s.get('ok'))} OK"),
+            } for s in steps]),
+        ))
+
+    if errors:
+        total = sum(count for _, count in errors)
+        cards.append(charts.card(
+            "Tipos de error detectados",
+            "Clasificación automática de las fallas según el mensaje devuelto por el navegador.",
+            charts.donut(
+                [{"label": kind, "value": count, "text": f"{_count(count)} · {count / total * 100:.0f}%"}
+                 for kind, count in errors],
+                center_value=_count(total), center_label="error" if total == 1 else "errores",
+            ),
+        ))
+
+    if len(probes) > 1:
+        cards.append(charts.card(
+            "Comparativa entre sondas",
+            "P95 de cada sonda. Valores parejos confirman que la medición es consistente y no está "
+            "sesgada por una sonda lenta.",
+            charts.hbars([{
+                "label": probe.get("probe_id") or "sonda",
+                "value": _p(probe.get("flow_ms"), "p95") or 0,
+                "color": charts.RED if probe.get("fail") else charts.BLUE,
+                "text": f"p95 {_ms(_p(probe.get('flow_ms'), 'p95'))} · "
+                        f"{_plural(probe.get('journeys'), 'journey')} · "
+                        f"{_pct(probe.get('success_rate'))} de éxito",
+            } for probe in probes], label_width=130, value_width=280),
+        ))
+
+    if samples:
+        labels = [(0, charts.clock(samples[0].get("ts"))), (1, charts.clock(samples[-1].get("ts")))]
+        cards.append(charts.card(
+            "Consumo del generador de carga",
+            "CPU y memoria de la instancia que ejecuta las sondas. Sirve para descartar que los "
+            "tiempos medidos vengan de un generador saturado.",
+            charts.multi_line(
+                [{"label": "CPU %", "color": charts.BLUE,
+                  "values": [s.get("cpu_percent") or 0 for s in samples]},
+                 {"label": "Memoria %", "color": charts.TEAL,
+                  "values": [s.get("mem_percent") or 0 for s in samples]}],
+                lambda v: f"{v:.0f}%", x_labels=labels, top=100,
+            ),
+        ))
+        cards.append(charts.card(
+            "Carga del sistema durante la corrida",
+            "Load average de un minuto: procesos esperando CPU. Si supera la cantidad de núcleos "
+            "de la instancia, el generador se queda corto y conviene repartir las sondas.",
+            charts.multi_line(
+                [{"label": "Carga del sistema (load average)", "color": charts.PURPLE,
+                  "values": [s.get("load1") or 0 for s in samples]}],
+                lambda v: f"{v:.1f}", x_labels=labels,
+            ),
+        ))
+
+    return charts.grid(cards)
 
 
 def render_informe_html(detail: dict) -> str:
@@ -241,6 +432,26 @@ def render_informe_html(detail: dict) -> str:
     table.narrow {{ max-width:560px; }}
     .bar {{ background:var(--line); border-radius:99px; height:8px; width:150px; overflow:hidden; }}
     .bar i {{ display:block; height:100%; background:var(--blue); }}
+    .summary {{ border-left:5px solid var(--blue); background:var(--bg); border-radius:12px;
+             padding:16px 20px; margin:4px 0 22px; }}
+    .summary span {{ font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+             color:var(--blue); font-weight:700; }}
+    .summary p {{ margin:6px 0 0; font-size:14.5px; line-height:1.6; }}
+    .summary.warn {{ border-left-color:#e8a33d; background:#fff9ef; }}
+    .summary.warn span {{ color:#a9701a; }}
+    .summary.bad {{ border-left-color:#dc3545; background:#fdeef0; }}
+    .summary.bad span {{ color:#b02a37; }}
+    .charts {{ display:grid; gap:18px; margin-top:12px; }}
+    .chart {{ border:1px solid var(--line); border-radius:16px; padding:18px 22px 20px;
+             page-break-inside:avoid; break-inside:avoid; }}
+    .chart h3 {{ margin:0; font-size:16px; }}
+    .chart p {{ margin:4px 0 12px; font-size:12.5px; color:var(--muted); line-height:1.5; }}
+    .chart-svg {{ display:block; width:100%; height:auto; }}
+    .chart-empty {{ color:var(--muted); font-size:13px; margin:0; }}
+    .chart-legend {{ display:flex; flex-wrap:wrap; gap:18px; font-size:12px; color:var(--muted);
+             margin-top:10px; }}
+    .chart-legend i {{ display:inline-block; width:10px; height:10px; border-radius:3px;
+             margin-right:6px; }}
     .pill {{ display:inline-block; background:#e8f0fe; color:var(--blue); border-radius:999px;
              padding:3px 10px; margin:4px 6px 4px 0; font-size:12px; }}
     .pill.bad {{ background:#fdeaec; color:#dc3545; }}
@@ -254,7 +465,10 @@ def render_informe_html(detail: dict) -> str:
     .actions a, .actions button {{ background:var(--blue); color:#fff; border:0; padding:10px 16px;
              border-radius:10px; text-decoration:none; cursor:pointer; font-size:14px; }}
     @media print {{ .actions {{ display:none; }}
-      header {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }} }}
+      main {{ padding:0 12px; max-width:none; }}
+      h2 {{ page-break-after:avoid; break-after:avoid; }}
+      table, section.probe {{ page-break-inside:avoid; break-inside:avoid; }}
+      header, .summary, .neck, .chart {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }} }}
   </style>
 </head>
 <body>
@@ -269,6 +483,7 @@ def render_informe_html(detail: dict) -> str:
       <button onclick="window.print()">Guardar PDF</button>
       <a href="/informe.pdf?instance={instance_id}&run={run_id}">Descargar PDF</a>
     </div>
+    {_summary_html(stats)}
     <div class="kpis">
       <div><span>Journeys</span><b>{stats.get('journeys') or 0}</b></div>
       <div><span>Flujos correctos</span><b>{stats.get('ok') or 0}</b></div>
@@ -279,9 +494,11 @@ def render_informe_html(detail: dict) -> str:
       <div><span>Validaciones</span><b>{stats.get('asserts') or 0}</b></div>
       <div><span>P95 flujo</span><b>{_ms(_p(stats.get('flow_ms'), 'p95'))}</b></div>
     </div>
+    <h2>Análisis gráfico</h2>
+    {_charts_html(stats)}
+    {neck_html}
     <h2>Métricas de carga</h2>
     {_metrics_table_html(stats)}
-    {neck_html}
     <h2>Pasos del flujo</h2>
     <table>{step_head}<tbody>{step_rows(stats.get('steps'))}</tbody></table>
     <h2>Tipos de error</h2>
@@ -428,6 +645,34 @@ class _Doc:
             self.pdf.cell(CONTENT_W - track_w - 63, 6, self.t(text))
             self.pdf.set_y(y + 6.5)
 
+    def stacked_bars(self, items: List[tuple]):
+        """items: (label, ok, fail, text)."""
+        if not items:
+            self.line(6, "Sin datos", 9, color=MUTED)
+            return
+        top_value = max(ok + fail for _, ok, fail, _ in items) or 1
+        track_x, track_w = MARGIN + 60, 62
+        for label, ok, fail, text in items:
+            if self.pdf.get_y() > 262:
+                self.pdf.add_page()
+            y = self.pdf.get_y()
+            self.font(8, False, NAVY)
+            self.pdf.set_xy(MARGIN, y)
+            self.pdf.cell(58, 6, self.fit(self.t(label), 56))
+            self.pdf.set_fill_color(238, 242, 248)
+            self.pdf.rect(track_x, y + 1.4, track_w, 3.4, "F")
+            # Total en rojo y encima el tramo correcto en verde: lo que queda
+            # rojo a la derecha es exactamente la porción fallida.
+            self.pdf.set_fill_color(*BAD_RED)
+            self.pdf.rect(track_x, y + 1.4, max(0.8, track_w * (ok + fail) / top_value), 3.4, "F")
+            if ok:
+                self.pdf.set_fill_color(*OK_GREEN)
+                self.pdf.rect(track_x, y + 1.4, max(0.8, track_w * ok / top_value), 3.4, "F")
+            self.font(8, False, MUTED)
+            self.pdf.set_xy(track_x + track_w + 3, y)
+            self.pdf.cell(CONTENT_W - track_w - 63, 6, self.t(text))
+            self.pdf.set_y(y + 6.5)
+
 
 def _step_rows(doc: _Doc, steps: List[dict]) -> List[List[tuple]]:
     rows = []
@@ -535,6 +780,22 @@ def build_pdf(detail: dict, evidence_dir: str) -> bytes:
 
     doc.heading("Pasos del flujo")
     doc.table(STEP_HEADERS, _step_rows(doc, stats.get("steps")))
+
+    executed = [step for step in (stats.get("steps") or []) if step.get("runs")]
+    if executed:
+        doc.heading("Pasos correctos e incorrectos")
+        doc.line(5, "Verde = ejecuciones correctas · rojo = ejecuciones con fallo.", 8, color=MUTED)
+        doc.stacked_bars([
+            (
+                f"{step.get('step_index')}. {step.get('label') or step.get('action') or ''}",
+                step.get("ok") or 0,
+                step.get("fail") or 0,
+                f"{_count(step.get('ok'))} OK · {_count(step.get('fail'))} FAIL"
+                f" ({(step.get('fail_rate') or 0) * 100:.1f}%)"
+                if step.get("fail") else f"{_count(step.get('ok'))} OK",
+            )
+            for step in executed
+        ])
 
     doc.heading("Tipos de error")
     errors = sorted((stats.get("error_types") or {}).items(), key=lambda kv: -kv[1])
