@@ -17,6 +17,13 @@ class NavTimings(BaseModel):
     transfer_size: Optional[int] = None
 
 
+class WebVitals(BaseModel):
+    """Core Web Vitals del journey. LCP y FCP en ms; CLS es un índice sin unidad."""
+    lcp_ms: Optional[float] = None
+    fcp_ms: Optional[float] = None
+    cls: Optional[float] = None
+
+
 class StepResult(BaseModel):
     step_index: int
     action: str
@@ -25,6 +32,9 @@ class StepResult(BaseModel):
     start_time: float
     duration_ms: float
     error_message: Optional[str] = None
+    # "error", "slow" o "reference": distingue la captura de un fallo de la del
+    # recorrido de referencia, que se ve igual pero significa lo contrario.
+    capture_reason: Optional[str] = None
     screenshot_path: Optional[str] = None
     dom_snapshot_path: Optional[str] = None
     dom: Optional[DomMetrics] = None
@@ -41,6 +51,7 @@ class FlowResult(BaseModel):
     error: Optional[str] = None
     nav_timings: Optional[NavTimings] = None
     final_dom: Optional[DomMetrics] = None
+    web_vitals: Optional[WebVitals] = None
 
     @property
     def error_count(self) -> int:

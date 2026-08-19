@@ -5,7 +5,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from argos.controller.client import TOKEN_HEADER, controller_token
-from argos.controller.pdf_report import build_pdf, render_informe_html
+from argos.controller.pdf_report import build_pdf, render_compare_html, render_informe_html
 from argos.controller.store import Store
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -43,25 +43,36 @@ def make_handler(store: Store):
                 return {}
             return json.loads(raw.decode("utf-8"))
 
-        def _serve_file(self, path: str, content_type: str):
+        def _serve_file(self, path: str, content_type: str, head_only: bool = False):
             if not os.path.isfile(path):
                 self._json(404, {"error": "not found"})
                 return
-            with open(path, "rb") as handle:
-                body = handle.read()
+            if head_only:
+                size = os.path.getsize(path)
+                body = b""
+            else:
+                with open(path, "rb") as handle:
+                    body = handle.read()
+                size = len(body)
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Length", str(size))
+            if content_type.startswith("text/html"):
+                self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            if not head_only:
+                self.wfile.write(body)
 
-        def do_GET(self):
+        def do_HEAD(self):
+            self.do_GET(head_only=True)
+
+        def do_GET(self, head_only: bool = False):
             parsed = urlparse(self.path)
             path = parsed.path
             query = parse_qs(parsed.query)
 
             if path in ("/", "/index.html"):
-                self._serve_file(os.path.join(STATIC_DIR, "index.html"), "text/html; charset=utf-8")
+                self._serve_file(os.path.join(STATIC_DIR, "index.html"), "text/html; charset=utf-8", head_only)
                 return
             if path == "/api/live":
                 self._json(200, store.live())
@@ -85,7 +96,7 @@ def make_handler(store: Store):
                     self._json(404, {"error": "not found"})
                     return
                 content_type = "image/png" if filename.endswith(".png") else "text/html; charset=utf-8"
-                self._serve_file(file_path, content_type)
+                self._serve_file(file_path, content_type, head_only)
                 return
             if path == "/informe":
                 instance_id = (query.get("instance") or [None])[0]
@@ -121,6 +132,24 @@ def make_handler(store: Store):
                 self.end_headers()
                 self.wfile.write(pdf_bytes)
                 return
+            if path == "/comparar":
+                # runs=gen-01:run_x,gen-02:run_y — una corrida compara escalones,
+                # varias del mismo instante consolidan una prueba distribuida.
+                selections = []
+                for token in (query.get("runs") or [""])[0].split(","):
+                    instance_id, _, run_id = token.partition(":")
+                    if instance_id and run_id:
+                        selections.append((instance_id, run_id))
+                if not selections:
+                    self._json(400, {"error": "runs required, e.g. runs=gen-01:run_x,gen-02:run_y"})
+                    return
+                body = render_compare_html(store.compare(selections)).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if path == "/api/runs":
                 date = (query.get("date") or [None])[0]
                 self._json(200, {
@@ -144,6 +173,12 @@ def make_handler(store: Store):
                 else:
                     self._json(200, {"dates": store.list_dates()})
                 return
+            if path.startswith("/static/"):
+                name = os.path.basename(path)
+                allowed = {"z-load.png": "image/png"}
+                if name in allowed:
+                    self._serve_file(os.path.join(STATIC_DIR, name), allowed[name], head_only)
+                    return
             self._json(404, {"error": "not found"})
 
         def do_POST(self):

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ARGOS · Live Room</title>
+<title>Z-Load · Stress</title>
 <style>
   :root{
     --blue:#1263f5; --blue-dark:#0b3f9e; --blue-soft:#eaf1ff; --blue-line:#cddffd;
@@ -14,14 +14,28 @@
   body{margin:0;background:var(--bg);color:var(--ink);
     font:15px/1.55 "Segoe UI",Inter,system-ui,-apple-system,Roboto,Arial,sans-serif}
   a{color:var(--blue);text-decoration:none}
-  header{background:linear-gradient(115deg,#0b3f9e,#1263f5 55%,#3f8bff);color:#fff;
-    padding:22px 28px;display:flex;align-items:center;gap:22px;flex-wrap:wrap}
-  header h1{margin:0;font-size:21px;letter-spacing:.16em;font-weight:700}
-  header .tag{font-size:12px;opacity:.85;letter-spacing:.04em}
-  nav{margin-left:auto;display:flex;gap:8px}
-  nav button{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.28);color:#fff;
-    padding:8px 16px;border-radius:999px;cursor:pointer;font-size:14px}
-  nav button.active{background:#fff;color:var(--blue-dark);font-weight:600;border-color:#fff}
+  header{background:linear-gradient(115deg,#071428,#0b3f9e 45%,#1263f5);color:#fff;
+    padding:0;box-shadow:0 8px 24px rgba(11,63,158,.28);position:sticky;top:0;z-index:40}
+  header .mast{max-width:1280px;margin:0 auto;padding:14px 22px;display:flex;
+    align-items:center;gap:20px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:14px;color:#fff;cursor:pointer;min-width:0}
+  .brand img{width:64px;height:64px;object-fit:contain;border-radius:14px;
+    background:#000;border:2px solid #9ec2ff;
+    box-shadow:0 0 20px rgba(158,194,255,.7);flex-shrink:0}
+  .brand .name{font-size:24px;font-weight:800;letter-spacing:.01em;line-height:1.1;color:#fff;
+    text-shadow:0 1px 0 rgba(0,0,0,.35)}
+  .brand .name em{font-style:normal;color:#d6e6ff;font-weight:600}
+  .brand .sub{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#eaf1ff;
+    margin-top:4px;opacity:.95}
+  nav{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  nav .label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#d6e6ff;
+    margin-right:2px}
+  nav button, nav a.shot{background:#fff;border:0;color:#0b3f9e;
+    padding:10px 16px;border-radius:999px;cursor:pointer;font-size:14px;font-weight:700;
+    display:inline-flex;align-items:center;gap:7px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+  nav button:hover, nav a.shot:hover{background:#eaf1ff}
+  nav button.active{background:#0b3f9e;color:#fff;box-shadow:0 0 0 2px #fff inset}
+  nav a.shot{text-decoration:none}
   main{max-width:1280px;margin:0 auto;padding:26px 22px 70px}
   h2{font-size:20px;margin:0 0 4px}
   h3{font-size:15px;margin:0 0 12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
@@ -49,11 +63,12 @@
   .rows span{color:var(--muted)} .rows b{font-weight:600}
   .meter{margin-top:10px}
   .meter .lbl{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:3px}
-  .bar{height:7px;background:#eef2f8;border-radius:99px;overflow:hidden}
-  .bar i{display:block;height:100%;background:var(--blue);border-radius:99px}
-  .bar i.warn{background:var(--warn)} .bar i.bad{background:var(--bad)}
+  .meter .bar{height:7px;background:#eef2f8;border-radius:99px;overflow:hidden}
+  .meter .bar i{display:block;height:100%;background:var(--blue);border-radius:99px}
+  .meter .bar i.warn{background:var(--warn)} .meter .bar i.bad{background:var(--bad)}
   .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
-  select,.btn{font:inherit;border:1px solid var(--line);background:#fff;color:var(--ink);
+  .toolbar label{display:flex;align-items:center;gap:8px;margin:0;font-size:13px;color:var(--muted)}
+  select,.btn,input[type=time]{font:inherit;border:1px solid var(--line);background:#fff;color:var(--ink);
     padding:9px 15px;border-radius:10px;cursor:pointer}
   .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff;font-weight:600}
   .btn.ghost{background:transparent}
@@ -74,10 +89,27 @@
   .neck .t{font-size:18px;font-weight:700;margin:4px 0}
   .neck .d{font-size:13px;color:var(--muted)}
   .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
+  .pair .shot img{height:220px;object-fit:cover;object-position:top}
   .shot{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#fff}
   .shot img{width:100%;height:150px;object-fit:cover;object-position:top;display:block;background:#f0f4fa}
   .shot .meta{padding:10px 12px;font-size:12px}
   .shot .meta .err{color:var(--bad);word-break:break-word;max-height:56px;overflow:hidden;margin-top:4px}
+  .compare-bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:var(--card);
+    border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;margin-bottom:14px;
+    font-size:13px}
+  .compare-bar label{display:flex;align-items:center;gap:7px;cursor:pointer}
+  .compare-bar #compare-count{margin-right:auto}
+  .compare-bar button{background:var(--blue);color:#fff;border:0;border-radius:9px;
+    padding:9px 15px;font-size:13px;cursor:pointer}
+  .compare-bar button:disabled{background:#c8d4e6;cursor:not-allowed}
+  .card .pick{display:flex;align-items:center;cursor:pointer;padding:2px 6px 2px 0}
+  .card .pick input{cursor:pointer}
+  .evidence-title{margin:22px 0 4px;font-size:16px}
+  .evidence-title:first-child{margin-top:0}
+  .evidence-note{margin:0 0 12px;font-size:13px;color:var(--muted);line-height:1.55}
+  .evidence-note .err{display:block;margin-top:4px;color:var(--bad);
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;word-break:break-word}
   .sonda{margin-bottom:14px}
   .sonda summary{cursor:pointer;padding:14px 18px;list-style:none;display:flex;
     align-items:center;gap:12px;flex-wrap:wrap;font-weight:600}
@@ -88,37 +120,180 @@
   .empty{padding:40px;text-align:center;color:var(--muted)}
   .legend{display:flex;gap:16px;font-size:12px;color:var(--muted);margin-top:8px;flex-wrap:wrap}
   .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px}
+  .hangar{margin-bottom:22px}
+  .hangar .head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px}
+  .hangar .head h3{margin:0;color:var(--ink);text-transform:none;letter-spacing:0;font-size:16px}
+  .hangar .head .muted{margin:0}
+  .fleet{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:16px}
+  .unit{background:linear-gradient(160deg,#152238 0%,#1a2d4a 55%,#123056 100%);
+    color:#fff;border:1px solid #4d8dff;border-radius:18px;
+    padding:16px 18px;display:grid;grid-template-columns:118px 1fr;gap:16px;align-items:center;
+    cursor:pointer;box-shadow:0 8px 24px rgba(18,99,245,.18), inset 0 1px 0 rgba(255,255,255,.12);
+    transition:border-color .15s, transform .15s, box-shadow .15s}
+  .unit:hover{border-color:#7eb0ff;transform:translateY(-2px);
+    box-shadow:0 12px 28px rgba(18,99,245,.28)}
+  .unit.offline{filter:none;border-color:#9aa8bc;
+    background:linear-gradient(160deg,#2a3340,#343e4c);
+    box-shadow:0 4px 14px rgba(13,27,42,.12)}
+  .unit.offline .portrait img{filter:grayscale(.35) brightness(1.15)}
+  .unit .portrait{position:relative;width:118px;height:118px;
+    background:radial-gradient(circle at 50% 40%,#1a3a68 0%,#05070c 70%);
+    border-radius:16px;overflow:hidden;border:1px solid #5aa0ff;
+    box-shadow:0 0 22px rgba(63,139,255,.55)}
+  .unit .portrait img{width:100%;height:100%;object-fit:contain;object-position:center 8%;
+    display:block;filter:brightness(1.18) contrast(1.12) saturate(1.15)}
+  .unit .led{position:absolute;bottom:8px;right:8px;width:14px;height:14px;border-radius:50%;
+    border:2px solid #0b1220}
+  .unit .led.on{background:#22c55e;box-shadow:0 0 12px #22c55e}
+  .unit .led.wait{background:#f5b942;box-shadow:0 0 12px #f5b942}
+  .unit .led.off{background:#94a3b8}
+  .unit .led.err{background:#ef4444;box-shadow:0 0 12px #ef4444}
+  .unit .callsign{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9ec2ff;
+    font-weight:700;margin:0 0 2px}
+  .unit .name{font-size:18px;font-weight:700;margin:0;color:#fff}
+  .unit .name em{font-style:normal;color:#b8d4ff;font-weight:600}
+  .unit .code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.08em;
+    color:#d6e6ff;font-size:14px;margin:4px 0 8px;font-weight:700}
+  .unit .rows{color:#e8eef8;margin:0}
+  .unit .rows span{color:#b7c6dc}
+  .unit .rows b{color:#fff}
+  .unit .pill.on{background:#1a5c32;color:#b6f5d0}
+  .unit .pill.off{background:#3d4758;color:#e2e8f0}
+  .unit .pill.err{background:#7a1d28;color:#ffc4ca}
+  .unit .pill.warn{background:#6a4a12;color:#ffe3a3}
+  .unit .who{min-width:0}
+  .unit .top{margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .howto{background:#eaf1ff;border:1px solid var(--blue-line);border-radius:var(--radius);
+    padding:14px 18px;margin-bottom:18px;font-size:14px;line-height:1.55}
+  .howto b{color:var(--blue-dark)}
+  .carga{background:var(--card);border:1px solid var(--line);border-radius:18px;
+    padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 3px rgba(13,27,42,.05)}
+  .carga .carga-head{display:flex;justify-content:space-between;align-items:flex-start;
+    gap:12px;flex-wrap:wrap;margin-bottom:4px}
+  .carga .carga-head h3{margin:0;font-size:18px;text-transform:none;letter-spacing:0;color:var(--ink)}
+  .carga .carga-meta{font-size:13px;color:var(--muted);margin:6px 0 12px}
+  .carga .carga-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .gen{border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-top:10px;background:#fafcff}
+  .gen .gen-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer}
+  .gen .gen-head:hover .gen-name{color:var(--blue)}
+  .gen .gen-name{font-weight:700}
+  .gen details{margin-top:10px}
+  .gen summary{cursor:pointer;color:var(--blue);font-size:13px;font-weight:600;list-style:none}
+  .gen summary::-webkit-details-marker{display:none}
+  .gen summary:before{content:"▸ ";}
+  .gen details[open] summary:before{content:"▾ "}
+  .levels{display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:0 0 16px}
+  .levels span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+  .levels b{color:var(--ink)}
+  .meet{display:grid;grid-template-columns:200px 1fr;gap:22px;align-items:center;
+    background:linear-gradient(160deg,#0c1424 0%,#152238 55%,#123056 100%);
+    color:#fff;border:1px solid #4d8dff;border-radius:18px;padding:18px 24px 18px 12px;
+    margin:0 0 22px;box-shadow:0 8px 24px rgba(18,99,245,.18)}
+  .meet img{width:200px;height:200px;object-fit:contain;display:block;
+    filter:brightness(1.12) contrast(1.08) saturate(1.1)}
+  .meet .call{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#9ec2ff;
+    font-weight:700;margin:0 0 6px}
+  .meet h2{margin:0 0 8px;font-size:26px;color:#fff;text-transform:none;letter-spacing:0}
+  .meet h2 em{font-style:normal;color:#7eb0ff;font-weight:600}
+  .meet p{margin:0 0 10px;color:#d5deea;font-size:14.5px;line-height:1.6}
+  .meet p:last-child{margin:0}
+  .meet a{color:#9ec2ff}
+  @media (max-width:720px){
+    .meet{grid-template-columns:1fr;text-align:center;padding:18px}
+    .meet img{margin:0 auto}
+  }
+  .g-search{width:100%;max-width:420px;font:inherit;border:1px solid var(--line);background:#fff;
+    color:var(--ink);padding:10px 14px;border-radius:10px;margin:0 0 18px}
+  .g-group{margin-bottom:28px}
+  .g-group h3{margin:0 0 10px}
+  .g-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+  .g-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 18px;box-shadow:0 1px 3px rgba(13,27,42,.05)}
+  .g-card .term{font-weight:700;font-size:16px;margin:0 0 2px}
+  .g-card .aka{font-size:12px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+    margin:0 0 8px}
+  .g-card p{margin:0 0 8px;font-size:13.5px;line-height:1.55}
+  .g-card p:last-child{margin:0}
+  .g-card .formula{background:#f0f5ff;border:1px solid var(--blue-line);border-radius:8px;
+    padding:8px 10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+    margin:8px 0 0;color:#0b3f9e;line-height:1.45;white-space:pre-wrap}
+  .g-card .watch{margin-top:8px;font-size:12.5px;color:#a9701a;background:#fff9ef;
+    border-radius:8px;padding:8px 10px}
+
 </style>
 </head>
 <body>
 <header>
-  <div>
-    <h1>ARGOS</h1>
-    <div class="tag">Live Room · monitoreo de sondas y carga</div>
+  <div class="mast">
+    <div class="brand" id="brand-home" title="Ir a carga en curso">
+      <img src="/static/z-load.png" alt="Z-Load">
+      <div>
+        <div class="name">Z-Load <em>· Stress</em></div>
+        <div class="sub">Zentriks · Live Room</div>
+      </div>
+    </div>
+    <nav>
+      <span class="label">Accesos</span>
+      <button data-view="live" class="active" type="button">Carga en curso</button>
+      <button data-view="runs" type="button">Cargas</button>
+      <button data-view="glossary" type="button">Glosario</button>
+      <a class="shot" href="https://zentriks.cl/conoce-robots" target="_blank" rel="noopener">Robots</a>
+    </nav>
   </div>
-  <nav>
-    <button data-view="live" class="active">Sesión en vivo</button>
-    <button data-view="runs">Ejecuciones</button>
-  </nav>
 </header>
 
 <main>
   <section id="view-live">
-    <h2>Sesión en vivo</h2>
-    <p class="muted" id="live-sub">Esperando generadores…</p>
+    <article class="meet">
+      <img src="/static/z-load.png" alt="Z-Load, robot de stress testing de Zentriks">
+      <div>
+        <div class="call">Zentriks · robot de stress testing</div>
+        <h2>Z-Load <em>· Stress</em></h2>
+        <p>Te presenta <b>Z-Load</b>, el robot que ejecuta cada sonda. Abre un
+          Chromium real, recorre el journey y reporta tiempos, errores y evidencia.
+          Una <b>carga</b> es la prueba que lanzas; adentro van los generadores
+          y, en cada uno, estos robots.</p>
+        <p><a href="https://zentriks.cl/conoce-robots" target="_blank" rel="noopener">Conoce a los robots de Zentriks →</a></p>
+      </div>
+    </article>
+    <h2>Carga en curso</h2>
+    <p class="muted" id="live-sub">Esperando que arranque una carga…</p>
+    <div class="howto">
+      <b>Flujo del operador.</b> Lanzas <b>una carga</b> (un runner, o hasta 10
+      generadores a la misma hora). Aquí aparece como un solo bloque. Dentro
+      están los generadores; las sondas (robots) se abren ahí, no en la portada.
+      El histórico, pestaña <b>Cargas</b>, agrupa por fecha y hora de ejecución.
+    </div>
     <div id="live-kpis" class="kpis"></div>
-    <h3>Generadores</h3>
-    <div id="instances" class="cards"></div>
+    <div id="fleet"></div>
   </section>
 
   <section id="view-runs" class="hidden">
-    <h2>Ejecuciones por fecha y hora</h2>
-    <p class="muted">Cada corrida queda registrada con su fecha, hora de inicio y métricas completas.</p>
+    <h2>Cargas por fecha y hora</h2>
+    <p class="muted">Elige el día y, si quieres, una ventana de horas. Todo lo que arrancó
+      entre Desde y Hasta se agrupa en una sola carga (generadores y sondas juntos).
+      Sin ventana, se agrupan solos los que partieron a la misma hora.</p>
     <div class="toolbar">
-      <label for="date-select" class="muted" style="margin:0">Fecha</label>
-      <select id="date-select"></select>
+      <label for="date-select">Fecha
+        <select id="date-select"></select>
+      </label>
+      <label for="time-from">Desde
+        <input id="time-from" type="time" value="00:00" step="60">
+      </label>
+      <label for="time-to">Hasta
+        <input id="time-to" type="time" value="23:59" step="60">
+      </label>
+      <button type="button" class="btn ghost" id="time-reset">Todo el día</button>
     </div>
     <div id="runs-list"></div>
+  </section>
+
+  <section id="view-glossary" class="hidden">
+    <h2>Glosario de métricas</h2>
+    <p class="muted">Qué mide cada número que entrega el robot Z-Load, cómo se calcula y cómo leerlo.
+      Los tiempos del informe son de tiempo activo (sin pausas), salvo que se indique lo contrario.</p>
+    <input id="g-search" class="g-search" type="search" placeholder="Buscar métrica, sigla o fórmula…">
+    <div id="glossary-list"></div>
   </section>
 
   <section id="view-detail" class="hidden">
@@ -153,6 +328,7 @@ let origin = "live";     // vista desde la que se abrió el detalle
 let current = null;      // {instance, run}
 let timer = null;
 const STATUS = {running:"EN LÍNEA", finished:"FINALIZADO", offline:"SIN CONEXIÓN"};
+const openSondas = new Set();
 
 /* ---------- formatters ---------- */
 const nf = new Intl.NumberFormat("es-CL");
@@ -301,55 +477,473 @@ function stackedBarChart(items){
   return out;
 }
 
+function waterfallChart(items){
+  items = (items || []).filter(it => it.ms > 0);
+  if(!items.length) return `<div class="empty">Sin pasos para armar la cascada.</div>`;
+  const total = (items[items.length-1].start_ms || 0) + items[items.length-1].ms;
+  const rowH = 26, top = 8, labelW = 200, right = 90;
+  const height = top + items.length * rowH + 8;
+  const track = W - labelW - right;
+  const color = {active:"#1263f5", wait:"#c8d4e6", neck:"#e8a33d"};
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    const x = track * ((it.start_ms || 0) / total);
+    const w = Math.max(2, track * it.ms / total);
+    out += `<text x="0" y="${y+16}" font-size="12" fill="#0d1b2a">${esc(clip(it.label, 28))}</text>`;
+    out += `<rect x="${labelW}" y="${y+5}" width="${track}" height="14" rx="3" fill="#f1f5fb"/>`;
+    out += `<rect x="${labelW + x}" y="${y+5}" width="${w}" height="14" rx="3" fill="${color[it.kind] || "#1263f5"}"/>`;
+    out += `<text x="${W-6}" y="${y+16}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(ms(it.ms))}</text>`;
+  });
+  out += `</svg>
+    <div class="legend"><span><i style="background:#1263f5"></i>Paso activo</span>
+    <span><i style="background:#c8d4e6"></i>Think time</span>
+    <span><i style="background:#e8a33d"></i>Cuello de botella</span></div>`;
+  return out;
+}
+
+function vitalsChart(items){
+  if(!items.length) return `<div class="empty">Sin Core Web Vitals en esta corrida.</div>`;
+  const rowH = 44, top = 8, labelW = 210, right = 80;
+  const height = top + items.length * rowH + 8;
+  const track = W - labelW - right;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  items.forEach((it, i) => {
+    const y = top + i * rowH;
+    const ceiling = Math.max(it.poor * 1.4, it.value * 1.05, 0.001);
+    const marker = Math.min(track, track * it.value / ceiling);
+    const goodX = track * it.good / ceiling;
+    const poorX = track * it.poor / ceiling;
+    const tone = it.value <= it.good ? "#0f9d58" : (it.value <= it.poor ? "#e8a33d" : "#dc3545");
+    out += `<text x="0" y="${y+16}" font-size="12" fill="#0d1b2a">${esc(it.label)}</text>`;
+    out += `<rect x="${labelW}" y="${y+8}" width="${goodX}" height="12" rx="3" fill="#d4edda"/>`;
+    out += `<rect x="${labelW+goodX}" y="${y+8}" width="${Math.max(0, poorX-goodX)}" height="12" fill="#fff3cd"/>`;
+    out += `<rect x="${labelW+poorX}" y="${y+8}" width="${Math.max(0, track-poorX)}" height="12" rx="3" fill="#f8d7da"/>`;
+    out += `<rect x="${labelW+marker-2}" y="${y+4}" width="4" height="20" rx="1" fill="${tone}"/>`;
+    out += `<text x="${W-6}" y="${y+18}" text-anchor="end" font-size="13" font-weight="700" fill="${tone}">${esc(it.text)}</text>`;
+    out += `<text x="${labelW}" y="${y+36}" font-size="11" fill="#5b6b80">bueno ≤ ${esc(it.goodText)} · pobre > ${esc(it.poorText)}</text>`;
+  });
+  out += `</svg>
+    <div class="legend"><span><i style="background:#d4edda"></i>Bueno</span>
+    <span><i style="background:#fff3cd"></i>Mejorable</span>
+    <span><i style="background:#f8d7da"></i>Pobre</span></div>`;
+  return out;
+}
+
+const PHASE_COLORS = ["#8ab4ff", "#00a3b5", "#1263f5", "#7b61ff", "#e8a33d", "#0f9d58"];
+
+function throughputChart(points, bucketSeconds){
+  if(!points || points.length < 2)
+    return `<div class="empty">Se necesitan al menos dos ventanas de tiempo.</div>`;
+  const right = 56, plotW = W - PAD.l - right, plotH = H - PAD.t - PAD.b;
+  const rates = points.map(p => p.per_minute || 0);
+  const top = Math.max(...rates) * 1.15 || 1;
+  const errors = points.map(p => (p.error_rate || 0) * 100);
+  const hasErrors = errors.some(v => v > 0);
+  const errTop = Math.max(Math.max(...errors) * 1.3, 5);
+
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  for(let i = 0; i <= 4; i++){
+    const y = PAD.t + plotH * (i/4);
+    out += `<line x1="${PAD.l}" y1="${y}" x2="${W-right}" y2="${y}" stroke="#eef2f8"/>`;
+    out += `<text x="${PAD.l-8}" y="${y+4}" text-anchor="end" font-size="11" fill="#5b6b80">
+            ${Math.round(top - top*(i/4))}</text>`;
+    if(hasErrors) out += `<text x="${W-right+8}" y="${y+4}" font-size="11" fill="#dc3545">
+            ${Math.round(errTop - errTop*(i/4))}%</text>`;
+  }
+  const slot = plotW / points.length;
+  rates.forEach((v, i) => {
+    if(v <= 0) return;
+    const h = plotH * (v/top);
+    out += `<rect x="${(PAD.l + i*slot + 1.5).toFixed(1)}" y="${(PAD.t + plotH - h).toFixed(1)}"
+            width="${Math.max(1, slot-3).toFixed(1)}" height="${h.toFixed(1)}" rx="2"
+            fill="#1263f5" opacity=".85"/>`;
+  });
+  if(hasErrors){
+    const pts = errors.map((v,i) =>
+      `${(PAD.l + slot*(i+0.5)).toFixed(1)},${(PAD.t + plotH*(1 - v/errTop)).toFixed(1)}`);
+    out += `<polyline points="${pts.join(" ")}" fill="none" stroke="#dc3545" stroke-width="2"
+            stroke-linejoin="round"/>`;
+  }
+  out += `<text x="${PAD.l}" y="${H-10}" font-size="11" fill="#5b6b80">${esc(clock(points[0].t))}</text>`;
+  out += `<text x="${W-right}" y="${H-10}" text-anchor="end" font-size="11" fill="#5b6b80">
+          ${esc(clock(points[points.length-1].t))}</text></svg>`;
+  out += `<div class="legend"><span><i style="background:#1263f5"></i>Journeys por minuto
+          (ventanas de ${bucketSeconds} s)</span>`;
+  if(hasErrors) out += `<span><i style="background:#dc3545"></i>Tasa de error (eje derecho)</span>`;
+  return out + `</div>`;
+}
+
+function phasesChart(phases){
+  if(!phases || !phases.length)
+    return `<div class="empty">Sin tiempos de navegación registrados.</div>`;
+  const total = phases.reduce((a,p) => a + p.ms, 0) || 1;
+  const barY = 22, barH = 36, gap = 30, rowH = 24;
+  const height = barY + barH + gap + phases.length * rowH;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">
+    <text x="0" y="12" font-size="11" fill="#5b6b80">Carga de página, tiempo mediano</text>
+    <text x="${W-6}" y="12" text-anchor="end" font-size="11" fill="#5b6b80">Total ${esc(ms(total))}</text>
+    <rect x="0" y="${barY}" width="${W}" height="${barH}" rx="6" fill="#f1f5fb"/>`;
+  let cursor = 0;
+  phases.forEach((p, i) => {
+    const span = W * p.ms / total, color = PHASE_COLORS[i % PHASE_COLORS.length];
+    out += `<rect x="${cursor.toFixed(1)}" y="${barY}" width="${Math.max(1,span).toFixed(1)}"
+            height="${barH}" fill="${color}"/>`;
+    if(span > 36) out += `<text x="${(cursor + span/2).toFixed(1)}" y="${barY+23}" text-anchor="middle"
+            font-size="12.5" fill="#fff">${Math.round(p.ms/total*100)}%</text>`;
+    cursor += span;
+  });
+  phases.forEach((p, i) => {
+    const y = barY + barH + gap + i * rowH, color = PHASE_COLORS[i % PHASE_COLORS.length];
+    out += `<rect x="0" y="${y-10}" width="11" height="11" rx="3" fill="${color}"/>
+      <text x="20" y="${y}" font-size="12.5" fill="#0d1b2a">${esc(p.label)}</text>
+      <text x="${W-6}" y="${y}" text-anchor="end" font-size="12.5" fill="#5b6b80">
+        ${esc(ms(p.ms))} · ${Math.round(p.ms/total*100)}%</text>`;
+  });
+  return out + `</svg>`;
+}
+
+function apdexChart(score){
+  const parts = [
+    {label:"Satisfechos", value:score.satisfied, color:"#0f9d58"},
+    {label:"Tolerantes",  value:score.tolerating, color:"#e8a33d"},
+    {label:"Frustrados",  value:score.frustrated, color:"#dc3545"},
+  ].filter(p => p.value > 0);
+  const total = parts.reduce((a,p) => a + p.value, 0) || 1;
+  const cx = 110, cy = 110, r = 78, sw = 26;
+  let angle = -Math.PI/2, out = `<svg viewBox="0 0 ${W} 230" role="img">`;
+  parts.forEach(p => {
+    const sweep = (p.value/total) * Math.PI * 2, end = angle + sweep;
+    const large = sweep > Math.PI ? 1 : 0;
+    // Un único segmento al 100% no se puede dibujar como arco: los dos extremos
+    // coinciden y el path queda vacío.
+    out += parts.length === 1
+      ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${p.color}" stroke-width="${sw}"/>`
+      : `<path d="M ${(cx+r*Math.cos(angle)).toFixed(1)} ${(cy+r*Math.sin(angle)).toFixed(1)}
+           A ${r} ${r} 0 ${large} 1 ${(cx+r*Math.cos(end)).toFixed(1)} ${(cy+r*Math.sin(end)).toFixed(1)}"
+           fill="none" stroke="${p.color}" stroke-width="${sw}"/>`;
+    angle = end;
+  });
+  out += `<text x="${cx}" y="${cy+4}" text-anchor="middle" font-size="30" font-weight="700"
+          fill="#0d1b2a">${score.score.toFixed(2)}</text>
+    <text x="${cx}" y="${cy+24}" text-anchor="middle" font-size="12" fill="#5b6b80">Apdex</text>`;
+  parts.forEach((p, i) => {
+    const y = 60 + i * 30;
+    out += `<rect x="250" y="${y-11}" width="12" height="12" rx="3" fill="${p.color}"/>
+      <text x="272" y="${y}" font-size="13" fill="#0d1b2a">${esc(p.label)}</text>
+      <text x="${W-6}" y="${y}" text-anchor="end" font-size="13" fill="#5b6b80">
+        ${nf.format(p.value)} · ${Math.round(p.value/total*100)}%</text>`;
+  });
+  return out + `</svg>`;
+}
+
 function chartCard(title, subtitle, body){
   return `<div class="chart"><h4>${esc(title)}</h4><p>${esc(subtitle)}</p>${body}</div>`;
 }
 
-/* ---------- vista: sesión en vivo ---------- */
+/* ---------- agrupación: una carga = generadores que arrancaron juntos ---------- */
+const CARGA_WINDOW_MS = 8 * 60 * 1000;
+
+function parseStartMs(runId, startedAt){
+  const match = String(runId || "").match(/(\d{8})_(\d{6})/);
+  if(match){
+    const day = match[1], clock = match[2];
+    const dt = new Date(`${day.slice(0,4)}-${day.slice(4,6)}-${day.slice(6,8)}T${clock.slice(0,2)}:${clock.slice(2,4)}:${clock.slice(4,6)}`);
+    if(!isNaN(dt)) return dt.getTime();
+  }
+  if(startedAt){
+    const dt = new Date(startedAt);
+    if(!isNaN(dt)) return dt.getTime();
+  }
+  return 0;
+}
+
+function clusterCargas(items, getStart){
+  const sorted = items.slice().sort((a, b) => getStart(a) - getStart(b) ||
+    String(a.instance_id || "").localeCompare(String(b.instance_id || "")));
+  const clusters = [];
+  for(const item of sorted){
+    const t = getStart(item);
+    const last = clusters[clusters.length - 1];
+    if(last && t - last.start <= CARGA_WINDOW_MS) last.items.push(item);
+    else clusters.push({start: t, items: [item]});
+  }
+  clusters.reverse();
+  return clusters;
+}
+
+function cargaWhen(ms, until){
+  if(!ms) return "sin hora";
+  const d = new Date(ms);
+  if(isNaN(d)) return "sin hora";
+  const day = d.toLocaleString("es-CL", {
+    weekday: "short", day: "numeric", month: "short", year: "numeric"
+  });
+  const start = d.toLocaleTimeString("es-CL", {hour: "2-digit", minute: "2-digit", hour12: false});
+  if(until && until !== ms){
+    const end = new Date(until);
+    if(!isNaN(end)){
+      const finish = end.toLocaleTimeString("es-CL", {hour: "2-digit", minute: "2-digit", hour12: false});
+      return `${day} · ${start} – ${finish}`;
+    }
+  }
+  return `${day} · ${start}`;
+}
+
+function cargaRunsParam(items){
+  return items.map(it => `${it.instance_id}:${it.run_id}`).join(",");
+}
+
+function openCarga(items){
+  if(!items.length) return;
+  if(items.length === 1){
+    openDetail(items[0].instance_id, items[0].run_id);
+    return;
+  }
+  window.open("/comparar?runs=" + encodeURIComponent(cargaRunsParam(items)), "_blank");
+}
+
+function cargaStats(items, probesOf){
+  let users = 0, ok = 0, fail = 0, sondas = 0, onlineGens = 0;
+  const flows = new Set();
+  const p95s = [];
+  items.forEach(it => {
+    users += it.users || 0;
+    ok += it.ok || it.successes || 0;
+    fail += it.fail || it.failures || 0;
+    const probes = probesOf ? probesOf(it) : [];
+    sondas += probes.length || it.sondas || it.users || 0;
+    if(it.online || it.status === "running") onlineGens += 1;
+    if(it.flow) flows.add(it.flow);
+    const p95 = it.p95_ms;
+    if(p95 != null) p95s.push(p95);
+  });
+  const journeys = ok + fail;
+  return {
+    users, ok, fail, journeys, sondas, onlineGens,
+    flow: [...flows].join(" · ") || "flujo",
+    error_rate: journeys ? fail / journeys : 0,
+    p95_ms: p95s.length ? Math.max(...p95s) : null,
+  };
+}
+
+/* ---------- vista: carga en curso ---------- */
+function unitCode(instanceId, probeId){
+  const inst = String(instanceId || "GEN");
+  const digits = inst.match(/(\d+)/);
+  const instShort = digits
+    ? "G" + digits[1].padStart(2, "0")
+    : inst.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase() || "GEN";
+  const num = (String(probeId || "").match(/(\d+)/) || ["", "00"])[1];
+  return `ZL-${instShort}-P${String(num).padStart(2, "0")}`;
+}
+
+function expectedProbes(inst){
+  const known = inst.probes || [];
+  const byId = Object.fromEntries(known.map(p => [p.probe_id, p]));
+  const count = Math.max(inst.users || 0, known.length);
+  const list = [];
+  const seen = new Set();
+  for(let i = 1; i <= count; i++){
+    const id = `probe-${String(i).padStart(2, "0")}`;
+    const probe = byId[id] || known[i - 1];
+    if(probe && !seen.has(probe.probe_id)){
+      seen.add(probe.probe_id);
+      list.push(probe);
+    } else if(!byId[id]){
+      list.push({probe_id: id, journeys: 0, ok: 0, fail: 0, pending: true});
+    }
+  }
+  known.forEach(p => { if(!seen.has(p.probe_id)) list.push(p); });
+  return list;
+}
+
+function unitCard(inst, probe, index){
+  const online = inst.online;
+  const waiting = probe.pending && online;
+  const failed = (probe.fail || 0) > 0;
+  const led = !online ? "off" : (failed ? "err" : (waiting ? "wait" : "on"));
+  const pill = !online ? "off" : (failed ? "err" : (waiting ? "warn" : "on"));
+  const label = !online ? (STATUS[inst.status] || "SIN CONEXIÓN")
+    : (waiting ? "ARMANDO" : (failed ? "CON FALLOS" : "EN LÍNEA"));
+  const code = unitCode(inst.instance_id, probe.probe_id || `probe-${index + 1}`);
+  return `<article class="unit ${online ? "" : "offline"}"
+      data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}"
+      title="${esc(code)}">
+    <div class="portrait">
+      <img src="/static/z-load.png" alt="Z-Load ${esc(code)}">
+      <span class="led ${led}" title="${esc(label)}"></span>
+    </div>
+    <div class="who">
+      <div class="top">
+        <div class="callsign">Unidad ${String(index + 1).padStart(2, "0")} · Zentriks</div>
+        <span class="pill ${pill}">${esc(label)}</span>
+      </div>
+      <div class="name">Z-Load <em>· Stress</em></div>
+      <div class="code">${esc(code)}</div>
+      <div class="rows">
+        <span>Sonda</span><b>${esc(probe.probe_id)}</b>
+        <span>Journeys</span><b>${nf.format(probe.journeys || 0)}</b>
+        <span>OK / FAIL</span><b>${nf.format(probe.ok || 0)} / ${nf.format(probe.fail || 0)}</b>
+        <span>Generador</span><b>${esc(inst.instance_id)}</b>
+      </div>
+    </div>
+  </article>`;
+}
+
+function generatorBlock(inst, opts){
+  const live = !!(opts && opts.live);
+  const units = live ? expectedProbes(inst) : [];
+  const online = live ? inst.online : (inst.finished === false);
+  const r = inst.resources || {};
+  const sondas = live ? units.length : (inst.sondas || inst.users || 0);
+  const ok = inst.ok || inst.successes || 0;
+  const fail = inst.fail || inst.failures || 0;
+  const pill = live
+    ? (online ? "on" : "off")
+    : (inst.finished ? "blue" : "warn");
+  const label = live
+    ? (STATUS[inst.status] || inst.status)
+    : (inst.finished ? "FINALIZADO" : "EN CURSO");
+  const memText = r.mem_used_mb ? `${Math.round(r.mem_used_mb)} / ${Math.round(r.mem_total_mb||0)} MB` : null;
+  const sondaFail = units.filter(p => (p.fail || 0) > 0).length;
+  const sondaWait = units.filter(p => p.pending).length;
+  const summary = live
+    ? `Ver ${nf.format(sondas)} sonda${sondas === 1 ? "" : "s"} de este generador` +
+      (sondaFail ? ` · ${sondaFail} con fallos` : "") +
+      (sondaWait ? ` · ${sondaWait} armando` : "")
+    : `Este generador llevó ${nf.format(sondas)} sonda${sondas === 1 ? "" : "s"}`;
+  const key = `${inst.instance_id}:${inst.run_id}`;
+  const opened = openSondas.has(key);
+  return `<div class="gen" data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}">
+    <div class="gen-head">
+      <span class="gen-name">${esc(inst.instance_id)}</span>
+      <span class="pill ${pill}">${esc(label)}</span>
+      <span class="muted">${nf.format(sondas)} sondas ·
+        ${nf.format(ok)} OK / ${nf.format(fail)} FAIL ·
+        P50 ${ms(inst.p50_ms)} · P95 ${ms(inst.p95_ms)}</span>
+    </div>
+    ${live ? `
+      ${meter("CPU del generador", r.cpu_percent, r.cpu_percent != null ? r.cpu_percent + "%" : null)}
+      ${meter("Memoria", r.mem_percent, memText)}
+      ${r.browser_processes ? `<div class="legend"><span>${nf.format(r.browser_processes)} procesos de navegador · load ${r.load1 ?? "—"}</span></div>` : ""}
+      ${inst.last_error ? `<div class="legend" style="color:var(--bad)">${esc(String(inst.last_error).slice(0,160))}</div>` : ""}
+      <details class="sonda-box"${opened ? " open" : ""}>
+        <summary>${esc(summary)}</summary>
+        <div class="fleet" style="margin-top:12px">${units.map((p, i) => unitCard(inst, p, i)).join("")}</div>
+      </details>` : `
+      <div class="muted" style="margin:6px 0 0">${esc(summary)}. Click en el generador para su informe.</div>`}
+  </div>`;
+}
+
+function cargaCard(cluster, opts){
+  const live = !!(opts && opts.live);
+  const items = cluster.items;
+  const st = cargaStats(items, live ? expectedProbes : null);
+  const running = live
+    ? items.some(it => it.online)
+    : items.some(it => it.finished === false);
+  const statusPill = running ? "warn" : "blue";
+  const statusLabel = running ? "EN CURSO" : "FINALIZADA";
+  const runs = cargaRunsParam(items);
+  return `<article class="carga">
+    <div class="carga-head">
+      <div>
+        <h3>Carga · ${esc(cargaWhen(cluster.start, cluster.until))}</h3>
+        <div class="carga-meta">
+          ${nf.format(items.length)} generador${items.length === 1 ? "" : "es"} ·
+          ${nf.format(st.sondas)} sondas · ${esc(st.flow)}
+        </div>
+      </div>
+      <div class="carga-actions">
+        ${opts && opts.pick ? `<label class="pick" title="Incluir esta carga en la comparación">
+          <input type="checkbox" class="pick-carga" value="${esc(runs)}"></label>` : ""}
+        <span class="pill ${statusPill}">${statusLabel}</span>
+        <button type="button" class="btn primary carga-report" data-runs="${esc(runs)}">
+          ${items.length > 1 ? "Informe consolidado" : "Ver informe"}</button>
+      </div>
+    </div>
+    <div class="kpis" style="margin-bottom:8px">
+      ${kpi("Generadores", nf.format(items.length), live ? `${st.onlineGens} en línea` : null, "blue")}
+      ${kpi("Sondas", nf.format(st.sondas), "usuarios virtuales", "blue")}
+      ${kpi("Journeys", nf.format(st.journeys))}
+      ${kpi("Correctos", nf.format(st.ok), null, "ok")}
+      ${kpi("Incorrectos", nf.format(st.fail), null, st.fail ? "bad" : "")}
+      ${kpi("Tasa de error", pct(st.error_rate), null, st.error_rate > 0.05 ? "bad" : "ok")}
+      ${kpi("P95", ms(st.p95_ms), items.length > 1 ? "peor generador" : null)}
+    </div>
+    ${items.map(inst => generatorBlock(inst, {live})).join("")}
+  </article>`;
+}
+
 async function loadLive(){
   const data = await fetch("/api/live").then(r => r.json()).catch(() => null);
   if(!data) return;
-  $("live-sub").textContent =
-    `${data.online_instances} generador(es) en línea · ${nf.format(data.total_users)} usuarios virtuales · ` +
-    `actualizado ${clock(data.generated_at)}`;
-  $("live-kpis").innerHTML =
-    kpi("Usuarios virtuales", nf.format(data.total_users), "sondas concurrentes", "blue") +
-    kpi("Journeys", nf.format(data.iterations), "flujos completos") +
-    kpi("Correctos", nf.format(data.ok), null, "ok") +
-    kpi("Incorrectos", nf.format(data.fail), null, data.fail ? "bad" : "") +
-    kpi("Tasa de error", pct(data.error_rate), null, data.error_rate > 0.05 ? "bad" : "ok") +
-    kpi("P95 flujo", ms(data.p95_ms), "peor generador");
+  const clusters = clusterCargas(data.instances, inst => parseStartMs(inst.run_id, inst.started_at))
+    .filter(c => c.items.some(inst => inst.online));
+  const online = data.instances.filter(inst => inst.online);
+  const onlineUnits = online.reduce((n, inst) => n + expectedProbes(inst).length, 0);
+  $("live-sub").textContent = clusters.length
+    ? `${clusters.length} carga${clusters.length === 1 ? "" : "s"} en curso · ` +
+      `${nf.format(data.online_instances)} generador(es) · ${nf.format(onlineUnits)} sondas · ` +
+      `actualizado ${clock(data.generated_at)}`
+    : `Sin carga en curso · actualizado ${clock(data.generated_at)}`;
+  $("live-kpis").innerHTML = clusters.length
+    ? kpi("Cargas en curso", nf.format(clusters.length), "pruebas a esta hora", "blue") +
+      kpi("Generadores", nf.format(data.online_instances), "máquinas con runner", "blue") +
+      kpi("Sondas", nf.format(onlineUnits), "navegadores reales", "blue") +
+      kpi("Journeys", nf.format(data.iterations), "flujos completos") +
+      kpi("Correctos", nf.format(data.ok), null, "ok") +
+      kpi("Incorrectos", nf.format(data.fail), null, data.fail ? "bad" : "") +
+      kpi("Tasa de error", pct(data.error_rate), null, data.error_rate > 0.05 ? "bad" : "ok") +
+      kpi("P95 flujo", ms(data.p95_ms), "peor generador")
+    : "";
 
-  if(!data.instances.length){
-    $("instances").innerHTML = `<div class="card empty">Sin generadores registrados todavía.</div>`;
+  if(!clusters.length){
+    $("fleet").innerHTML = `<div class="card empty">No hay carga en curso. Lanza un runner
+      (uno o hasta 10 generadores a la misma hora) y esta prueba aparece aquí como un solo
+      bloque. Las sondas se ven dentro de cada generador.</div>`;
     return;
   }
-  $("instances").innerHTML = data.instances.map(inst => {
-    const r = inst.resources || {};
-    const memText = r.mem_used_mb ? `${Math.round(r.mem_used_mb)} / ${Math.round(r.mem_total_mb||0)} MB` : null;
-    return `<div class="card inst" data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}">
-      <div class="top">
-        <span class="name">${esc(inst.instance_id)}</span>
-        <span class="pill ${inst.online ? "on" : "off"}">${esc(STATUS[inst.status] || inst.status)}</span>
-      </div>
-      <div class="muted" style="margin:0 0 6px">${esc(inst.flow || "—")} · ${esc(inst.run_id || "")}</div>
-      <div class="rows">
-        <span>Usuarios</span><b>${nf.format(inst.users)}</b>
-        <span>Journeys</span><b>${nf.format(inst.iterations)}</b>
-        <span>OK / FAIL</span><b>${nf.format(inst.ok)} / ${nf.format(inst.fail)}</b>
-        <span>P50 / P95</span><b>${ms(inst.p50_ms)} / ${ms(inst.p95_ms)}</b>
-        <span>Sondas activas</span><b>${nf.format((inst.probes||[]).length)}</b>
-        <span>Visto</span><b>${clock(inst.last_seen)}</b>
-      </div>
-      ${meter("CPU del generador", r.cpu_percent, r.cpu_percent != null ? r.cpu_percent + "%" : null)}
-      ${meter("Memoria", r.mem_percent, memText)}
-      ${r.browser_processes ? `<div class="legend"><span>${nf.format(r.browser_processes)} procesos de navegador · carga ${r.load1 ?? "—"}</span></div>` : ""}
-      ${inst.last_error ? `<div class="legend" style="color:var(--bad)">${esc(String(inst.last_error).slice(0,120))}</div>` : ""}
-    </div>`;
-  }).join("");
+  $("fleet").innerHTML = clusters.map(c => cargaCard(c, {live: true})).join("");
+  bindCargaClicks($("fleet"));
+}
 
-  document.querySelectorAll(".inst").forEach(el => {
-    el.onclick = () => openDetail(el.dataset.instance, el.dataset.run);
+function bindCargaClicks(root){
+  root.querySelectorAll(".carga-report").forEach(btn => {
+    btn.onclick = (ev) => {
+      ev.stopPropagation();
+      const parts = (btn.dataset.runs || "").split(",").filter(Boolean).map(v => {
+        const [instance, run] = v.split(":");
+        return {instance_id: instance, run_id: run};
+      });
+      openCarga(parts);
+    };
+  });
+  root.querySelectorAll(".sonda-box").forEach(box => {
+    box.addEventListener("toggle", () => {
+      const gen = box.closest(".gen");
+      const key = `${gen.dataset.instance}:${gen.dataset.run}`;
+      if(box.open) openSondas.add(key);
+      else openSondas.delete(key);
+    });
+    const summary = box.querySelector("summary");
+    if(summary){
+      summary.onclick = (ev) => ev.stopPropagation();
+    }
+  });
+  root.querySelectorAll(".gen").forEach(el => {
+    const open = () => openDetail(el.dataset.instance, el.dataset.run);
+    el.querySelector(".gen-head").onclick = (ev) => {
+      if(ev.target.closest("details, button, a, .pick, summary")) return;
+      open();
+    };
+  });
+  root.querySelectorAll(".unit").forEach(el => {
+    el.onclick = (ev) => {
+      ev.stopPropagation();
+      openDetail(el.dataset.instance, el.dataset.run);
+    };
   });
 }
 
@@ -359,8 +953,8 @@ async function loadDates(){
   const sel = $("date-select");
   const dates = data.dates || [];
   if(!dates.length){
-    sel.innerHTML = `<option>Sin ejecuciones</option>`;
-    $("runs-list").innerHTML = `<div class="card empty">Todavía no hay ejecuciones registradas.</div>`;
+    sel.innerHTML = `<option>Sin cargas</option>`;
+    $("runs-list").innerHTML = `<div class="card empty">Todavía no hay cargas registradas.</div>`;
     return;
   }
   const keep = sel.value;
@@ -369,51 +963,130 @@ async function loadDates(){
   loadRuns(sel.value);
 }
 
+function parseHHMM(value){
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})/);
+  if(!match) return 0;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function startMinutes(item){
+  const t = parseStartMs(item.run_id, item.started_at);
+  if(!t) return 0;
+  const d = new Date(t);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function timeWindow(){
+  let from = parseHHMM($("time-from") && $("time-from").value);
+  let to = parseHHMM($("time-to") && $("time-to").value);
+  if($("time-to") && !$("time-to").value) to = 23 * 60 + 59;
+  if(from > to){ const swap = from; from = to; to = swap; }
+  const fullDay = from <= 0 && to >= 23 * 60 + 59;
+  return {from, to, fullDay};
+}
+
+function filterByHour(items){
+  const win = timeWindow();
+  if(win.fullDay) return {items, win, grouped: false};
+  return {
+    items: items.filter(it => {
+      const t = startMinutes(it);
+      return t >= win.from && t <= win.to;
+    }),
+    win,
+    grouped: true,
+  };
+}
+
 async function loadRuns(date){
   const data = await fetch("/api/runs?date=" + encodeURIComponent(date)).then(r => r.json());
-  const items = data.items || [];
-  if(!items.length){
-    $("runs-list").innerHTML = `<div class="card empty">Sin ejecuciones en ${esc(date)}.</div>`;
+  const dayItems = data.items || [];
+  if(!dayItems.length){
+    $("runs-list").innerHTML = `<div class="card empty">Sin cargas en ${esc(date)}.</div>`;
     return;
   }
+  const filtered = filterByHour(dayItems);
+  const items = filtered.items;
+  if(!items.length){
+    const win = filtered.win;
+    const from = $("time-from").value || "00:00";
+    const to = $("time-to").value || "23:59";
+    $("runs-list").innerHTML = `<div class="card empty">Nada arrancó el ${esc(date)} entre ${esc(from)} y ${esc(to)}.</div>`;
+    return;
+  }
+  const clusters = filtered.grouped
+    ? [{
+        start: Math.min(...items.map(it => parseStartMs(it.run_id, it.started_at))),
+        until: Math.max(...items.map(it => parseStartMs(it.run_id, it.started_at))),
+        items,
+      }]
+    : clusterCargas(items, it => parseStartMs(it.run_id, it.started_at));
   const total = items.reduce((a,i) => a + i.iterations, 0);
   const okAll = items.reduce((a,i) => a + i.successes, 0);
+  const windowLabel = filtered.grouped
+    ? `${$("time-from").value} – ${$("time-to").value}`
+    : date;
   $("runs-list").innerHTML =
-    `<div class="kpis">
-      ${kpi("Ejecuciones", items.length, date)}
+    `<div class="levels">
+      <span><b>1. Carga</b> · fecha y hora</span>
+      <span><b>2. Generador</b> · máquina</span>
+      <span><b>3. Sondas</b> · robots de ese generador</span>
+     </div>
+     <div class="kpis">
+      ${kpi("Cargas", nf.format(clusters.length), windowLabel, "blue")}
+      ${kpi("Generadores", nf.format(items.length), filtered.grouped ? "agrupados en esta ventana" : null)}
       ${kpi("Journeys", nf.format(total))}
       ${kpi("Éxito", total ? pct(okAll/total) : "—", null, "ok")}
-      ${kpi("Generadores", new Set(items.map(i => i.instance_id)).size)}
      </div>
-     <div class="cards">` +
-    items.map(run => `
-      <div class="card inst" data-instance="${esc(run.instance_id)}" data-run="${esc(run.run_id)}">
-        <div class="top">
-          <span class="name">${clock(run.started_at)}</span>
-          <span class="pill ${run.finished ? "blue" : "warn"}">${run.finished ? "FINALIZADA" : "EN CURSO"}</span>
-        </div>
-        <div class="muted" style="margin:0 0 6px">${esc(run.instance_id)} · ${esc(run.flow || "flujo")}</div>
-        <div class="rows">
-          <span>Journeys</span><b>${nf.format(run.iterations)}</b>
-          <span>Sondas</span><b>${nf.format(run.sondas || run.users || 0)}</b>
-          <span>OK / FAIL</span><b>${nf.format(run.successes)} / ${nf.format(run.failures)}</b>
-          <span>Éxito</span><b>${pct(run.success_rate)}</b>
-          <span>P50 / P95</span><b>${ms(run.p50_ms)} / ${ms(run.p95_ms)}</b>
-          <span>Fin</span><b>${run.ended_at ? clock(run.ended_at) : "—"}</b>
-        </div>
-      </div>`).join("") + `</div>`;
+     <div class="compare-bar">
+       <label><input type="checkbox" id="compare-all"> Seleccionar todas las cargas</label>
+       <span id="compare-count" class="muted">${filtered.grouped
+         ? "Esta ventana ya es una sola carga. Ábrela con Informe consolidado."
+         : "Marca dos o más cargas (escalones) para compararlas"}</span>
+       <button id="compare-go" disabled>Comparar cargas</button>
+     </div>` +
+    clusters.map(c => cargaCard(c, {pick: true})).join("");
 
-  document.querySelectorAll("#runs-list .inst").forEach(el => {
-    el.onclick = () => openDetail(el.dataset.instance, el.dataset.run);
+  bindCargaClicks($("runs-list"));
+  const picks = () => [...document.querySelectorAll(".pick-carga:checked")].map(c => c.value);
+  const refresh = () => {
+    const n = picks().length;
+    $("compare-count").textContent = n < 2
+      ? (filtered.grouped
+          ? "Esta ventana ya es una sola carga. Ábrela con Informe consolidado."
+          : "Marca dos o más cargas (escalones) para compararlas")
+      : `${n} cargas seleccionadas`;
+    $("compare-go").disabled = n < 2;
+  };
+  document.querySelectorAll(".pick-carga").forEach(c => {
+    c.onchange = refresh;
+    c.onclick = (ev) => ev.stopPropagation();
   });
+  $("compare-all").onchange = (ev) => {
+    document.querySelectorAll(".pick-carga").forEach(c => { c.checked = ev.target.checked; });
+    refresh();
+  };
+  $("compare-go").onclick = () =>
+    window.open("/comparar?runs=" + encodeURIComponent(picks().join(",")), "_blank");
 }
 
 /* ---------- vista: detalle de ejecución ---------- */
 const METRICS = [
-  ["Duración del flujo", "flow_ms", ms],
+  // El tiempo activo encabeza la tabla porque la duración total incluye el
+  // think time del flujo y describe nuestras pausas, no la respuesta del sitio.
+  ["Tiempo activo (sin think time)", "active_ms", ms],
+  ["Duración total (con think time)", "flow_ms", ms],
+  ["Think time simulado", "think_ms", ms],
+  ["Resolución DNS", "dns_ms", ms],
+  ["Conexión TCP", "tcp_ms", ms],
   ["TTFB", "ttfb_ms", ms],
+  ["DOM Interactive", "dom_interactive_ms", ms],
   ["DOMContentLoaded", "dom_content_loaded_ms", ms],
   ["Load", "load_ms", ms],
+  ["Largest Contentful Paint", "lcp_ms", ms],
+  ["First Contentful Paint", "fcp_ms", ms],
+  ["Cumulative Layout Shift", "cls", (v) => v == null ? "—" : Number(v).toFixed(3)],
+  ["Peso transferido", "transfer_size", bytes],
   ["Peso del DOM", "dom_size_bytes", bytes],
   ["Nodos del DOM", "dom_node_count", (v) => v == null ? "—" : nf.format(Math.round(v))],
 ];
@@ -427,7 +1100,9 @@ const RESOURCES = [
 ];
 
 function metricsTable(source){
-  const rows = METRICS.filter(([, key]) => source[key]);
+  // Una fila entera en cero (DNS con conexión reutilizada, o think time en un
+  // flujo sin pausas) solo agrega ruido a una tabla ya densa.
+  const rows = METRICS.filter(([, key]) => source[key] && source[key].max);
   if(!rows.length) return `<div class="empty">Sin métricas registradas.</div>`;
   return `<table><thead><tr><th class="l">Métrica</th><th>Muestras</th><th>Mín</th><th>Prom</th>
     <th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>Máx</th></tr></thead><tbody>` +
@@ -461,7 +1136,7 @@ function stepsTable(steps){
     <th class="l">#</th><th class="l">Paso</th><th class="l">Acción</th>
     <th>Ejec.</th><th>OK</th><th>FAIL</th>
     <th>Mín</th><th>Prom</th><th>P50</th><th>P90</th><th>P95</th><th>P99</th><th>Máx</th>
-    <th>% flujo</th></tr></thead><tbody>` +
+    <th>% activo</th></tr></thead><tbody>` +
     steps.map(s => {
       const d = s.duration_ms;
       return `<tr class="${s.bottleneck ? "slow" : ""}">
@@ -480,24 +1155,142 @@ function stepsTable(steps){
     }).join("") + `</tbody></table>`;
 }
 
-function shotsGrid(shots){
-  if(!shots || !shots.length)
-    return `<div class="card empty">Sin errores capturados en esta ejecución.</div>`;
-  return `<div class="shots">` + shots.map(s => `
-    <div class="shot">
-      ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener"><img src="${esc(s.url)}" alt="Error paso ${s.step_index}" loading="lazy"></a>`
-              : `<div class="empty" style="height:150px">sin imagen</div>`}
-      <div class="meta">
-        <b>${esc(s.probe_id)}</b> · paso ${s.step_index} · ${clock(s.at)}<br>
-        <span class="pill err">${esc(s.error_type || "Error")}</span> ${esc(s.label)}
-        <div class="err">${esc(String(s.error || "").slice(0,180))}</div>
-        ${s.dom_url ? `<a href="${esc(s.dom_url)}" target="_blank" rel="noopener">Ver DOM capturado</a>` : ""}
-      </div>
-    </div>`).join("") + `</div>`;
+function shotCard(s, meta){
+  return `<div class="shot">
+    ${s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener"><img src="${esc(s.url)}"
+               alt="paso ${s.step_index}" loading="lazy"></a>`
+            : `<div class="empty" style="height:150px">sin imagen</div>`}
+    <div class="meta">${meta}
+      ${s.dom_url ? `<a href="${esc(s.dom_url)}" target="_blank" rel="noopener">Ver DOM capturado</a>` : ""}
+    </div>
+  </div>`;
+}
+
+function shotsGrid(stats){
+  const groups = stats.error_gallery || [];
+  const reference = stats.reference_shots || [];
+  const slow = stats.slow_shots || [];
+  const blocks = [];
+
+  if(reference.length){
+    blocks.push(`<h3 class="evidence-title">Recorrido de referencia</h3>
+      <p class="evidence-note">Así se ve el flujo cuando termina correctamente. Sirve de contraste
+      para leer las capturas de error.</p>
+      <div class="shots">` + reference.map(s => shotCard(s,
+        `<b>Paso ${s.step_index}</b> · ${esc(s.label || s.action || "")}`)).join("") + `</div>`);
+  }
+
+  if(slow.length){
+    blocks.push(`<h3 class="evidence-title">Pasos lentos que no fallaron</h3>
+      <p class="evidence-note">Terminaron correctamente pero tardaron más de lo aceptable: no
+      aparecen como error en ninguna métrica.</p>
+      <div class="shots">` + slow.map(s => shotCard(s,
+        `<b>${esc(s.probe_id)}</b> · paso ${s.step_index} ·
+         <span class="pill warn">${esc(ms(s.duration_ms))}</span><br>${esc(s.label || "")}`)).join("")
+      + `</div>`);
+  }
+
+  const pairs = stats.error_pairs || [];
+  if(pairs.length){
+    blocks.push(`<h3 class="evidence-title">Esperado vs error</h3>
+      <p class="evidence-note">Izquierda: el flujo cuando funciona. Derecha: lo que vio el usuario
+      cuando el paso falló.</p>` + pairs.map(p => {
+        const err = p.error || {};
+        const exp = p.expected || {};
+        return `<div class="pair">
+          ${exp.url ? shotCard(exp, `<b>Esperado</b> · paso ${err.step_index} · ${esc(err.label || "")}`)
+                    : `<div class="shot"><div class="empty" style="height:150px">sin referencia</div></div>`}
+          ${shotCard(err, `<b>Así falló</b> · ${esc(err.probe_id || "")} · ${clock(err.at)}<br>
+            <span class="err">${esc(String(err.error || "").slice(0,160))}</span>`)}
+        </div>`;
+      }).join(""));
+  }
+
+  if(groups.length){
+    blocks.push(`<h3 class="evidence-title">Evidencias de error</h3>` + groups.map(g => {
+      const steps = (g.steps || []).join(", ") || "—";
+      return `<p class="evidence-note"><span class="pill err">${esc(g.error_type)}</span>
+        <b>${nf.format(g.total)}</b> ocurrencia(s) · pasos ${esc(steps)}
+        <span class="err">${esc(String(g.sample_error || "").slice(0,200))}</span></p>
+        <div class="shots">` + (g.shots || []).map(s => shotCard(s,
+          `<b>${esc(s.probe_id)}</b> · paso ${s.step_index} · ${clock(s.at)}`)).join("") + `</div>`;
+    }).join(""));
+  }
+
+  if(!blocks.length)
+    return `<div class="card empty">Sin capturas en esta ejecución.</div>`;
+  return blocks.join("");
 }
 
 function renderCharts(stats){
   const cards = [];
+
+  const tp = stats.throughput || {};
+  if((tp.points || []).length > 1){
+    cards.push(chartCard(
+      "Rendimiento y errores durante la ejecución",
+      "Journeys que el sitio alcanzó a completar en cada ventana. Si las barras dejan de crecer " +
+      "mientras la línea roja sube, ahí está el punto de quiebre.",
+      throughputChart(tp.points, tp.bucket_seconds)
+    ));
+    cards.push(chartCard(
+      "Percentiles a lo largo del tiempo",
+      "Que el p95 se separe del p50 significa que unos pocos usuarios la están pasando mucho " +
+      "peor que el resto.",
+      lineChart([
+        {label:"p99", values: tp.points.map(p => p.p99_ms), color:"#7b61ff"},
+        {label:"p95", values: tp.points.map(p => p.p95_ms), color:"#e8a33d"},
+        {label:"p50 (mediana)", values: tp.points.map(p => p.p50_ms), color:"#1263f5"},
+      ], {unit: v => (v/1000).toFixed(1) + " s", legend: true, xLabels: [
+        {i:0, text:clock(tp.points[0].t)},
+        {i:tp.points.length-1, text:clock(tp.points[tp.points.length-1].t)},
+      ]})
+    ));
+  }
+
+  if(stats.apdex){
+    cards.push(chartCard(
+      `Apdex · ${stats.apdex.score.toFixed(2)}`,
+      `Satisfacción del usuario con umbral de ${ms(stats.apdex.threshold_ms)} sobre el tiempo ` +
+      `activo. 1,00 es perfecto.`,
+      apdexChart(stats.apdex)
+    ));
+  }
+
+  if((stats.nav_phases || []).length){
+    cards.push(chartCard(
+      "En qué se va la carga de la página",
+      "Si domina la espera del servidor el problema es el backend; si dominan el parseo y los " +
+      "scripts, es el frontend.",
+      phasesChart(stats.nav_phases)
+    ));
+  }
+
+  if((stats.waterfall || []).length){
+    cards.push(chartCard(
+      "Cascada del journey típico",
+      "Mediana de cada paso en secuencia. El gris es think time; el ámbar es el cuello de botella.",
+      waterfallChart(stats.waterfall)
+    ));
+  }
+
+  const vitalItems = [];
+  const lcp = P(stats.lcp_ms, "p75") || (stats.lcp_ms && stats.lcp_ms.avg);
+  if(lcp != null) vitalItems.push({label:"LCP · Largest Contentful Paint", value:lcp, good:2500,
+    poor:4000, text:ms(lcp), goodText:"2.50 s", poorText:"4.00 s"});
+  const fcp = P(stats.fcp_ms, "p75") || (stats.fcp_ms && stats.fcp_ms.avg);
+  if(fcp != null) vitalItems.push({label:"FCP · First Contentful Paint", value:fcp, good:1800,
+    poor:3000, text:ms(fcp), goodText:"1.80 s", poorText:"3.00 s"});
+  const cls = P(stats.cls, "p75") || (stats.cls && stats.cls.avg);
+  if(cls != null) vitalItems.push({label:"CLS · Cumulative Layout Shift", value:cls, good:0.1,
+    poor:0.25, text:Number(cls).toFixed(3), goodText:"0.100", poorText:"0.250"});
+  if(vitalItems.length){
+    cards.push(chartCard(
+      "Core Web Vitals (p75)",
+      "Umbrales de Google. El marcador es el p75 de la corrida, el mismo percentil que Search Console.",
+      vitalsChart(vitalItems)
+    ));
+  }
 
   const tl = stats.timeline || [];
   if(tl.length){
@@ -539,6 +1332,19 @@ function renderCharts(stats){
                      : `${nf.format(s.ok)} OK`
       })))
     ));
+
+    const domRows = steps.filter(s => s.dom_size_bytes && s.dom_size_bytes.avg);
+    if(domRows.length){
+      cards.push(chartCard(
+        "Peso del DOM por paso",
+        "Tamaño mediano del HTML en cada pantalla.",
+        barChart(domRows.map(s => ({
+          label: `${s.step_index}. ${s.label}`,
+          value: s.dom_size_bytes.avg,
+          text: bytes(s.dom_size_bytes.avg)
+        })))
+      ));
+    }
   }
 
   const errors = Object.entries(stats.error_types || {}).sort((a,b) => b[1]-a[1]);
@@ -637,14 +1443,18 @@ async function loadDetail(){
     return;
   }
 
-  const f = s.flow_ms || {};
+  const f = s.active_ms || s.flow_ms || {};
   $("detail-kpis").innerHTML =
     kpi("Journeys", nf.format(s.journeys), `${nf.format(s.sondas)} sondas`, "blue") +
     kpi("Flujos correctos", nf.format(s.ok), pct(s.success_rate), "ok") +
     kpi("Flujos incorrectos", nf.format(s.fail), pct(1 - s.success_rate), s.fail ? "bad" : "") +
     kpi("Navegaciones", nf.format(s.navigations), `${nf.format(s.clicks)} clicks · ${nf.format(s.asserts)} validaciones`) +
-    kpi("Mín / Prom / Máx", ms(f.avg), `${ms(f.min)} — ${ms(f.max)}`) +
-    kpi("P95 flujo", ms(P(f,"p95")), `p50 ${ms(P(f,"p50"))} · p99 ${ms(P(f,"p99"))}`) +
+    kpi("Apdex", s.apdex ? s.apdex.score.toFixed(2) : "—",
+        s.apdex ? `umbral ${ms(s.apdex.threshold_ms)}` : null, "blue") +
+    kpi("Tiempo activo", ms(f.avg), `${ms(f.min)} — ${ms(f.max)}`) +
+    kpi("P95 activo", ms(P(f,"p95")), `p50 ${ms(P(f,"p50"))} · p99 ${ms(P(f,"p99"))}`) +
+    kpi("LCP p75", ms(P(s.lcp_ms,"p75") || (s.lcp_ms && s.lcp_ms.avg)),
+        s.cls ? `CLS ${Number(P(s.cls,"p75") || s.cls.avg).toFixed(3)}` : `prom ${ms(s.lcp_ms && s.lcp_ms.avg)}`) +
     kpi("TTFB p95", ms(P(s.ttfb_ms,"p95")), `prom ${ms(s.ttfb_ms && s.ttfb_ms.avg)}`) +
     kpi("Peso DOM", bytes(s.dom_size_bytes && s.dom_size_bytes.avg),
         s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null);
@@ -654,27 +1464,272 @@ async function loadDetail(){
   $("detail-metrics").innerHTML = metricsTable(s);
   $("detail-resources").innerHTML = resourcesTable(s.resources || []);
   $("detail-steps").innerHTML = stepsTable(s.steps);
-  $("detail-shots").innerHTML = shotsGrid(s.failed_screenshots);
+  $("detail-shots").innerHTML = shotsGrid(s);
   renderSondas(s);
 }
 
-/* ---------- navegación ---------- */
+/* ---------- glosario ---------- */
+const GLOSSARY = [
+  {group:"Cómo se organiza una prueba", items:[
+    {term:"Carga", aka:"prueba de estrés · sesión",
+     what:"UNA prueba que el operador lanza. Puede ser 1 generador o hasta 10 arrancados a la misma hora. En el dashboard es el bloque con fecha y hora.",
+     how:"Se agrupan los runners cuyo run_id empieza con menos de 8 minutos de diferencia. 10 servidores que arrancaste juntos = 1 carga, no 10 pruebas ni 200 sondas sueltas.",
+     watch:"Esta es la unidad que mira el operador. Informe consolidado abre el conjunto. Comparar cargas sirve para escalones (25 vs 50 vs 100 usuarios)."},
+    {term:"Generador", aka:"instance_id · gen-01",
+     what:"Una máquina que corre runner.py. Dentro de una carga hay de 1 a 10. Cada una reporta su propio run_id.",
+     how:"Lo identifica --instance-id. Click en el generador abre el informe de ESA máquina.",
+     watch:"No es la prueba. Es un brazo de la prueba."},
+    {term:"Sonda / unidad Z-Load", aka:"probe_id · ZL-G01-P01",
+     what:"Un navegador Chromium real dentro de un generador. Recorre el YAML una y otra vez.",
+     how:"El código es ZL-G{n}-P{m}: n sale del instance-id (gen-01 → G01) y m del probe-id (probe-03 → P03).",
+     watch:"Las sondas NO son el nivel principal. Viven dentro del generador; el generador vive dentro de la carga. En vivo se abren con «Ver sondas de este generador»."}
+  ]},
+  {group:"Cómo mide el robot", items:[
+    {term:"Journey / flujo", aka:"iteración",
+     what:"Una vuelta completa del YAML: abrir páginas, clickear, escribir, validar y esperar.",
+     how:"Arranca en el primer paso y termina cuando el último sale OK, o se corta en el primer FAIL. El journey siguiente parte de cero.",
+     watch:"Si un paso falla, los siguientes no se ejecutan. Por eso un paso al final puede tener menos muestras."},
+    {term:"Paso", aka:"step · duration_ms",
+     what:"Una acción del YAML. El robot cronometra cada una por separado.",
+     how:"duration_ms = (fin − inicio) × 1000, medido en el proceso de la sonda con time.time()."},
+    {term:"Think time", aka:"wait · think_ms",
+     what:"Pausas que TÚ escribiste en el flujo (pasos wait) para simular a un usuario leyendo.",
+     how:"Suma de duration_ms de todos los pasos con action = wait de ese journey.",
+     watch:"No mide el sitio. Si lo mezclas con el tiempo activo, el número que reportas es tu propio sleep."},
+    {term:"Tiempo activo", aka:"active_ms",
+     what:"Lo que el usuario esperó al sitio: clicks, navegaciones, asserts e inputs. Sin las pausas wait.",
+     how:"Suma de duration_ms de todos los pasos que no son wait.",
+     watch:"Es el número que va al cliente. KPI, Apdex y p95 del informe usan este, no la duración total."},
+    {term:"Duración total del journey", aka:"total_duration_ms · flow_ms",
+     what:"Del primer paso al cierre del journey, incluyendo waits y el overhead del navegador.",
+     how:"(end_time − start_time) en milisegundos, reloj de pared.",
+     watch:"En vivo, el p50/p95 de la sesión usa ESTA duración (incluye think time). En el informe, el p95 que importa es el de tiempo activo."}
+  ]},
+  {group:"Carga en curso", items:[
+    {term:"Carga en curso", aka:"prueba que está corriendo ahora",
+     what:"El bloque de la portada. Si arrancaste 10 generadores a la misma hora, ves UNA carga con 10 filas de generador, no 10 pruebas ni un muro de sondas.",
+     how:"Se agrupan runners con menos de 8 minutos de diferencia en el run_id. Las sondas se abren dentro de cada generador.",
+     watch:"Si un generador se pone SIN CONEXIÓN, anótalo: esa máquina se cayó. La carga sigue mostrando a los demás."},
+    {term:"Unidades en línea", aka:"online",
+     what:"Cuántos robots están reportando ahora, sumados dentro de los generadores en línea.",
+     how:"Un generador está en línea si mandó un heartbeat en los últimos 15 s y su status no es finished. Las unidades en línea = suma de sondas esperadas de esos generadores.",
+     watch:"Si un generador pasa a SIN CONEXIÓN a mitad de prueba, ese servidor se cayó. Anótalo: sus datos quedan incompletos."},
+    {term:"EN LÍNEA / ARMANDO / CON FALLOS / SIN CONEXIÓN", aka:"LED de la unidad",
+     what:"Estado de cada robot en la flota.",
+     how:"SIN CONEXIÓN: el generador no late. ARMANDO: el generador late pero esa sonda aún no terminó un journey. CON FALLOS: ya tiene al menos un FAIL. EN LÍNEA: hay journeys y fail = 0."},
+    {term:"Usuarios virtuales", aka:"users · --users",
+     what:"Sondas concurrentes pedidas al runner. Cada una es un usuario con su propio Chromium.",
+     how:"En vivo se suman los --users de los generadores en línea, no de los que ya terminaron."},
+    {term:"Journeys (en vivo)", aka:"iterations",
+     what:"Flujos terminados (OK + FAIL) reportados por los generadores en línea.",
+     how:"Cada sonda incrementa el contador al cerrar un journey. El collector suma los heartbeats de las máquinas online."},
+    {term:"Correctos / Incorrectos", aka:"ok · fail",
+     what:"Journeys que recorrieron todos los pasos sin error, frente a los que se cortaron.",
+     how:"success = true si ningún paso salió FAIL. Un timeout, un selector que no aparece o un assert fallido cuentan como FAIL."},
+    {term:"Tasa de error", aka:"error_rate",
+     what:"Proporción de journeys que fallaron.",
+     how:"fail / (ok + fail). En vivo se calcula sobre los generadores en línea. En el informe, sobre toda la corrida.",
+     watch:"Si empieza a subir mientras los usuarios siguen creciendo, el sitio está cediendo. Eso es el dato de la prueba."},
+    {term:"Tasa de éxito", aka:"success_rate",
+     what:"La inversa de la tasa de error. Es el número que el cliente mira primero.",
+     how:"ok / journeys."},
+    {term:"P95 flujo (en vivo)", aka:"p95_ms del heartbeat",
+     what:"El p95 más alto entre los generadores en línea. El subtítulo dice «peor generador».",
+     how:"Cada runner calcula el p95 de total_duration_ms de sus journeys y lo manda cada 5 s. El dashboard toma el máximo, no el promedio.",
+     watch:"Incluye think time. No lo compares directo con el P95 activo del informe. Que el p95 se separe del p50 (mediana) significa que unos pocos usuarios la pasan mucho peor que el resto."}
+  ]},
+  {group:"Estadísticos (mín, promedio, percentiles)", items:[
+    {term:"muestras (n)", aka:"count",
+     what:"Cuántos valores entraron al cálculo. Un percentil con n=3 no es creíble.",
+     how:"Se descartan los null. Si no queda ninguno, la métrica se muestra como —."},
+    {term:"mín / máx", aka:"min · max",
+     what:"El valor más chico y el más grande de la serie.",
+     how:"min(valores), max(valores). Un solo timeout infla el máx; por eso el informe no usa el máx como KPI."},
+    {term:"promedio", aka:"avg",
+     what:"Media aritmética.",
+     how:"suma / n.",
+     watch:"Un timeout de 30 s desplaza el promedio aunque el resto haya sido de 1 s. Prefiere p50 y p95."},
+    {term:"p50 · mediana", aka:"percentiles.p50",
+     what:"La mitad de las muestras duró esto o menos. Describe al usuario típico.",
+     how:"Se ordenan los valores y se interpola en el rango (n−1)×0,50."},
+    {term:"p75", aka:"percentiles.p75",
+     what:"El 75% de las muestras quedó por debajo. Es el percentil que usa Google Search Console para Web Vitals.",
+     how:"Misma interpolación, p = 75. El informe marca LCP/FCP/CLS con este percentil."},
+    {term:"p90 / p95 / p99", aka:"cola de latencia",
+     what:"El 90%, 95% o 99% de los usuarios esperó esto o menos. El p95 es el que se reporta al cliente.",
+     how:"Interpolación lineal: rank = (n−1)×(p/100); se mezcla el valor en floor(rank) con el siguiente.",
+     watch:"Si p99 se aleja mucho de p50 hay una cola de usuarios sufriendo que ningún promedio detecta."},
+    {term:"Cómo se interpola un percentil", aka:"argos.reporting.stats.percentile",
+     what:"No se toma el valor «en la posición p%» a lo bruto: se interpola entre los dos vecinos.",
+     how:"valores ordenados v[0]…v[n−1]\nrank = (n−1) × p/100\nresultado = v[low] + (v[high]−v[low]) × (rank−low)"}
+  ]},
+  {group:"Apdex y veredicto", items:[
+    {term:"Apdex", aka:"Application Performance Index",
+     what:"Un número entre 0 y 1 que resume la satisfacción. Es la métrica que un gerente entiende sin explicación.",
+     how:"Umbral T = 4 s sobre TIEMPO ACTIVO (nunca sobre el total).\nSatisfecho: activo ≤ 4 s\nTolerante: 4 s < activo ≤ 16 s (4×T)\nFrustrado: activo > 16 s\nApdex = (satisfechos + tolerantes/2) / n",
+     watch:"Sobre 0,94 es bueno. Bajo 0,85 hay un problema real. No uses el Apdex del live: solo se calcula en el informe."},
+    {term:"Veredicto del informe", aka:"Estable · Con observaciones · Degradado",
+     what:"Etiqueta automática de la corrida, según la tasa de éxito.",
+     how:"≥ 99% éxito → Estable\n≥ 95% y < 99% → Con observaciones\n< 95% → Degradado"}
+  ]},
+  {group:"Tiempos de navegación (lo que mide Chromium)", items:[
+    {term:"TTFB", aka:"Time to First Byte · ttfb_ms",
+     what:"Desde que el navegador pide la página hasta que llega el primer byte de respuesta.",
+     how:"performance.getEntriesByType('navigation')[0].responseStart, en ms desde el inicio de la navegación.\nIncluye DNS + TCP + espera del servidor.",
+     watch:"Si el TTFB p95 es alto, el backend o la red están lentos. No se arregla comprimiendo imágenes."},
+    {term:"DNS", aka:"dns_ms",
+     what:"Cuánto tardó en resolverse el nombre de dominio.",
+     how:"domainLookupEnd − domainLookupStart de la Navigation Timing."},
+    {term:"TCP", aka:"tcp_ms",
+     what:"Tiempo de abrir la conexión (incluye el handshake TLS cuando aplica).",
+     how:"connectEnd − connectStart."},
+    {term:"Espera del servidor", aka:"fase TTFB − DNS − TCP",
+     what:"Lo que el backend se tomó en pensar la respuesta, ya conectado.",
+     how:"max(0, TTFB − DNS − TCP), usando medianas. Si esta fase manda, el problema está en el servidor."},
+    {term:"DOM Interactive", aka:"dom_interactive_ms",
+     what:"El HTML ya se parseó lo suficiente como para construir el DOM. El usuario todavía no ve la página lista.",
+     how:"nav.domInteractive, desde el inicio de la navegación."},
+    {term:"DOMContentLoaded", aka:"dcl · dom_content_loaded_ms",
+     what:"El HTML se parseó y se ejecutaron los scripts síncronos. Suele coincidir con «la página ya respondió».",
+     how:"nav.domContentLoadedEventEnd."},
+    {term:"Load", aka:"load_event_ms",
+     what:"Se disparó el evento load: imágenes y recursos bloqueantes terminaron.",
+     how:"nav.loadEventEnd. Si la navegación se corta en DOMContentLoaded, a veces Load no alcanza a registrarse y se descarta."},
+    {term:"Fases de la carga", aka:"nav_phases",
+     what:"El gráfico que parte la navegación en tramos consecutivos: DNS, TCP, espera del servidor, parseo, scripts, recursos.",
+     how:"Usa medianas (p50), no promedios, para que un timeout no descuadre la suma. Tramos bajo el 1% se ocultan como ruido."},
+    {term:"Tamaño transferido", aka:"transfer_size",
+     what:"Bytes de la respuesta de navegación (el documento HTML), no de toda la página.",
+     how:"nav.transferSize del recurso navigation. 0 suele indicar que salió de caché."}
+  ]},
+  {group:"Web Vitals (experiencia visual)", items:[
+    {term:"LCP · Largest Contentful Paint", aka:"lcp_ms",
+     what:"Cuándo apareció el elemento visual más grande (hero, imagen principal, titular). Es «cuándo el usuario siente que la página cargó».",
+     how:"PerformanceObserver de tipo largest-contentful-paint, leído después de cada open_url. Si el flujo visita varias páginas, el robot se queda con el LCP MÁS ALTO del journey.",
+     watch:"El informe marca el p75. Google: bueno ≤ 2,5 s · pobre > 4 s."},
+    {term:"FCP · First Contentful Paint", aka:"fcp_ms",
+     what:"Cuándo se pintó el primer texto o imagen. Es el primer signo de vida en pantalla.",
+     how:"PerformanceObserver de tipo paint, name = first-contentful-paint. Se toma el de la PRIMERA página del journey.",
+     watch:"p75. Google: bueno ≤ 1,8 s · pobre > 3 s."},
+    {term:"CLS · Cumulative Layout Shift", aka:"cls",
+     what:"Cuánto «saltó» el diseño mientras cargaba (botones que se mueven, banners que empujan el contenido). No es tiempo: es un índice.",
+     how:"Suma de layout-shift sin hadRecentInput en todas las páginas del journey.",
+     watch:"p75. Google: bueno ≤ 0,100 · pobre > 0,250. Un 0,25 ya es una página inestable."}
+  ]},
+  {group:"Throughput, cascada y cuello de botella", items:[
+    {term:"Throughput", aka:"journeys / min",
+     what:"Cuántos flujos alcanzó a terminar el sitio por minuto. Es la curva que encuentra el punto de quiebre.",
+     how:"Se agrupan los journeys por hora de TÉRMINO en ventanas de 1 s a 30 min, buscando ~5 journeys por barra.\npor_minuto = journeys_en_la_ventana × 60 / segundos_de_ventana\nLa última ventana se tira si cubrió menos del 60% (si no, dibuja una caída falsa).",
+     watch:"Mientras subes usuarios, las barras deben subir. Cuando se aplanan y la carga sigue creciendo, el sitio llegó a su techo."},
+    {term:"Cascada del journey", aka:"waterfall",
+     what:"El recorrido típico dibujado como Gantt: cada paso arranca donde terminó el anterior.",
+     how:"Usa la mediana (p50) de cada paso, no el p95. Sumar p95 inventa un journey que nadie recorrió.",
+     watch:"Las barras wait son tus pausas. El cuello de botella se pinta en ámbar y nunca es un wait."},
+    {term:"Cuello de botella", aka:"bottleneck",
+     what:"El paso activo más lento del flujo. Ahí hay que optimizar.",
+     how:"Entre los pasos que no son wait, gana el de mayor p95 (si no hay p95, el promedio). share_pct = promedio_del_paso / suma_de_promedios_activos × 100.",
+     watch:"Un solo timeout no debe secuestrar el promedio; por eso manda el p95."},
+    {term:"Tasa de fallo del paso", aka:"fail_rate",
+     what:"En qué fracción de ejecuciones ese paso salió FAIL.",
+     how:"fails / runs de ese step_index. Los pasos posteriores al corte tienen menos runs."}
+  ]},
+  {group:"DOM y evidencia", items:[
+    {term:"Peso del DOM", aka:"dom_size_bytes",
+     what:"Tamaño del HTML serializado en ese momento (outerHTML del documento).",
+     how:"document.documentElement.outerHTML.length, en bytes. Se toma al terminar cada paso y al cierre del journey."},
+    {term:"Nodos del DOM", aka:"dom_node_count",
+     what:"Cuántos elementos hay en la página. Un DOM inflado pone lento al navegador aunque el servidor responda rápido.",
+     how:"document.querySelectorAll('*').length."},
+    {term:"Recorrido de referencia", aka:"capture_reason = reference",
+     what:"Miniaturas del flujo cuando funciona, capturadas por la primera sonda al inicio.",
+     how:"Tras cada paso OK (no wait) de la primera sonda. Se desactiva con --no-reference."},
+    {term:"Paso lento que no falló", aka:"capture_reason = slow · --slow-shot",
+     what:"El paso terminó OK pero tardó más del umbral. Para el usuario es igual de malo que un error.",
+     how:"Si duration_ms ≥ --slow-shot (por omisión 8000 ms) se guarda un PNG. Tope: 5 por sonda."},
+    {term:"Evidencia de error", aka:"capture_reason = error",
+     what:"Pantallazo + HTML del momento en que el paso falló.",
+     how:"Al primer FAIL se captura y el journey se corta. En el informe se agrupan por tipo y se emparejan con la referencia del mismo paso."},
+    {term:"Tipos de error", aka:"Timeout · Red/DNS · Selector · Assert · Click · Otro",
+     what:"Clasificación automática del mensaje de error.",
+     how:"Busca en el texto: timeout → Timeout; net:: / dns / err_connection → Red/DNS; selector / waiting for → Selector; assert → Assert; click → Click; si no, Otro.",
+     watch:"Timeout y Red/DNS apuntan al sitio. Selector suele ser TU flujo desactualizado porque cambió el HTML."}
+  ]},
+  {group:"Recursos del generador (tu coartada)", items:[
+    {term:"CPU del generador", aka:"cpu_percent",
+     what:"Porcentaje de CPU de la máquina que corre las sondas, no del sitio bajo prueba.",
+     how:"Lee /proc/stat. Entre dos muestras: 100 × (1 − Δidle/Δtotal). La primera muestra sale vacía porque aún no hay delta.",
+     watch:"Si pasa de 70–75%, tus números ya no miden el sitio: miden tu propia saturación. Detén o baja sondas."},
+    {term:"Memoria", aka:"mem_percent · mem_used_mb",
+     what:"RAM usada por el servidor generador.",
+     how:"(MemTotal − MemAvailable) / MemTotal, desde /proc/meminfo. El usado se informa en MB."},
+    {term:"Load average", aka:"load1 · load5",
+     what:"Cuántos procesos están listos o esperando CPU, promedio de 1 y 5 minutos.",
+     how:"os.getloadavg(). Con 8 vCPU, un load1 de 8 ya es el techo. Por encima, el generador se quedó corto."},
+    {term:"Procesos de navegador", aka:"browser_processes",
+     what:"Cuántos procesos cuyo nombre contiene chrome hay en /proc. Cada sonda abre varios (renderer, GPU, etc.).",
+     how:"Cuenta /proc/<pid>/comm que contengan «chrome»."}
+  ]},
+  {group:"Identidad de la flota", items:[
+    {term:"Código de unidad", aka:"ZL-G01-P01",
+     what:"Identificador corto para reconocer un robot concreto en la sala y en el informe.",
+     how:"ZL- + G + dígitos del instance-id + -P + dígitos del probe-id, ambos con 2 cifras."},
+    {term:"Heartbeat", aka:"cada 5 s",
+     what:"El pulso que manda el runner al collector: journeys, ok/fail, p50/p95 y CPU/RAM.",
+     how:"POST /ingest/heartbeat cada 5 segundos. Los journeys detallados viajan aparte cada 1 s a /ingest/results."}
+  ]}
+];
+
+function renderGlossary(query){
+  const q = (query || "").trim().toLowerCase();
+  const root = $("glossary-list");
+  if(!root) return;
+  const html = GLOSSARY.map(block => {
+    const items = block.items.filter(it => {
+      if(!q) return true;
+      const blob = [block.group, it.term, it.aka, it.what, it.how, it.watch].join(" ").toLowerCase();
+      return blob.includes(q);
+    });
+    if(!items.length) return "";
+    return `<section class="g-group"><h3>${esc(block.group)}</h3>
+      <div class="g-grid">${items.map(it => `<article class="g-card">
+        <div class="term">${esc(it.term)}</div>
+        ${it.aka ? `<div class="aka">${esc(it.aka)}</div>` : ""}
+        <p>${esc(it.what)}</p>
+        ${it.how ? `<div class="formula">${esc(it.how)}</div>` : ""}
+        ${it.watch ? `<div class="watch">${esc(it.watch)}</div>` : ""}
+      </article>`).join("")}</div></section>`;
+  }).join("");
+  root.innerHTML = html || `<div class="card empty">Nada coincide con «${esc(query)}».</div>`;
+}
+
+$("g-search").oninput = (e) => renderGlossary(e.target.value);
+
 function switchView(next){
   view = next;
-  ["live","runs","detail"].forEach(v => $("view-" + v).classList.toggle("hidden", v !== next));
+  ["live","runs","detail","glossary"].forEach(v => $("view-" + v).classList.toggle("hidden", v !== next));
   document.querySelectorAll("nav button").forEach(b =>
     b.classList.toggle("active", b.dataset.view === next));
   if(timer) clearInterval(timer);
   if(next === "live"){ loadLive(); timer = setInterval(loadLive, 3000); }
   if(next === "runs"){ loadDates(); }
   if(next === "detail"){ timer = setInterval(loadDetail, 5000); }
+  if(next === "glossary"){ renderGlossary($("g-search").value); }
 }
 
 document.querySelectorAll("nav button").forEach(b => {
   b.onclick = () => switchView(b.dataset.view);
 });
+$("brand-home").onclick = () => switchView("live");
 $("back-btn").onclick = () => switchView(origin === "detail" ? "runs" : origin);
 $("date-select").onchange = (e) => loadRuns(e.target.value);
+const reloadRuns = () => { if($("date-select").value) loadRuns($("date-select").value); };
+$("time-from").onchange = reloadRuns;
+$("time-to").onchange = reloadRuns;
+$("time-reset").onclick = () => {
+  $("time-from").value = "00:00";
+  $("time-to").value = "23:59";
+  reloadRuns();
+};
 switchView("live");
 </script>
 </body>

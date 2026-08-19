@@ -41,10 +41,11 @@ def _init_worker(queue):
 
 def run_worker(args):
     """Worker process function."""
-    probe_id, flow_data, duration_sec, output_dir, headless = args
+    probe_id, flow_data, duration_sec, output_dir, headless, reference, slow_step_ms = args
 
     flow = Flow(**flow_data)
-    executor = FlowExecutor(probe_id=probe_id, output_dir=output_dir)
+    executor = FlowExecutor(probe_id=probe_id, output_dir=output_dir,
+                            reference=reference, slow_step_ms=slow_step_ms)
 
     results = []
     end_time = datetime.now() + timedelta(seconds=duration_sec)
@@ -77,7 +78,12 @@ def run_worker(args):
               help='Collector URL, e.g. http://hub:8080')
 @click.option('--instance-id', default=None, envvar='ARGOS_INSTANCE_ID',
               help='Instance id (default: hostname)')
-def main(users, duration, flow, output, headed, controller_url, instance_id):
+@click.option('--slow-shot', default=8000, type=float,
+              help='Capturar pantalla de pasos correctos que superen estos ms (0 = desactivado)')
+@click.option('--no-reference', is_flag=True,
+              help='No capturar el recorrido de referencia del flujo correcto')
+def main(users, duration, flow, output, headed, controller_url, instance_id,
+         slow_shot, no_reference):
     """ARGOS .IA Stress Test Runner"""
     instance_id = instance_id or socket.gethostname()
     print(f"=== ARGOS .IA Stress Test ===")
@@ -87,6 +93,8 @@ def main(users, duration, flow, output, headed, controller_url, instance_id):
     print(f"Output: {output}")
     print(f"Headless: {not headed}")
     print(f"Instance: {instance_id}")
+    if slow_shot:
+        print(f"Slow shot: pasos correctos sobre {slow_shot:.0f} ms")
     if controller_url:
         print(f"Controller: {controller_url}")
 
@@ -118,7 +126,10 @@ def main(users, duration, flow, output, headed, controller_url, instance_id):
     worker_args = []
     for i in range(users):
         probe_id = f"probe-{i+1:02d}"
-        worker_args.append((probe_id, flow_data, duration_sec, run_output_dir, not headed))
+        # Solo la primera sonda arma el recorrido de referencia: con 100 usuarios
+        # serían 100 copias idénticas del mismo flujo correcto.
+        worker_args.append((probe_id, flow_data, duration_sec, run_output_dir, not headed,
+                            i == 0 and not no_reference, slow_shot))
 
     result_queue = multiprocessing.Queue()
     aggregator = LiveAggregator()

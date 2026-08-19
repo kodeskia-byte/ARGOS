@@ -5,27 +5,76 @@ import traceback
 from datetime import datetime
 from typing import Optional
 from argos.models.flow import Flow, Step, ActionType
-from argos.models.result import DomMetrics, FlowResult, NavTimings, StepResult
+from argos.models.result import DomMetrics, FlowResult, NavTimings, StepResult, WebVitals
 from argos.probe.browser import BrowserManager
 
+# Se inyecta en cada navegación para que LCP/FCP/CLS sobrevivan al cambio de
+# página. Sin este script, performance.getEntries() a fin del journey solo
+# vería la última URL y perderíamos la métrica de la home, que es la que más
+# importa al cliente.
+VITALS_SCRIPT = """
+window.__argosVitals = {lcp: null, fcp: null, cls: 0};
+try {
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) window.__argosVitals.lcp = entry.startTime;
+  }).observe({type: 'largest-contentful-paint', buffered: true});
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (entry.name === 'first-contentful-paint') window.__argosVitals.fcp = entry.startTime;
+    }
+  }).observe({type: 'paint', buffered: true});
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      if (!entry.hadRecentInput) window.__argosVitals.cls += entry.value;
+    }
+  }).observe({type: 'layout-shift', buffered: true});
+} catch (err) {}
+"""
+
+# Tope de capturas de pasos lentos por sonda. Cada imagen viaja en base64 al
+# colector, así que sin límite una corrida degradada satura la red antes que el
+# sitio bajo prueba.
+MAX_SLOW_SHOTS = 5
+
+
 class FlowExecutor:
-    def __init__(self, probe_id: str, output_dir: str):
+    def __init__(self, probe_id: str, output_dir: str, reference: bool = False,
+                 slow_step_ms: float = 0):
         self.probe_id = probe_id
         self.output_dir = output_dir
         self.browser_manager = BrowserManager.instance()
-        
+        self.slow_step_ms = slow_step_ms
+        self._reference_pending = reference
+        self._slow_shots = 0
+
         # Ensure output dir exists
         os.makedirs(self.output_dir, exist_ok=True)
+
+    def _capture(self, page, kind: str, index: int, with_dom: bool = False) -> tuple:
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base = os.path.join(self.output_dir, f"{kind}_{self.probe_id}_step_{index}_{stamp}")
+        screenshot_file, dom_file = base + ".png", (base + ".html") if with_dom else None
+        try:
+            page.screenshot(path=screenshot_file)
+            if dom_file:
+                with open(dom_file, "w", encoding="utf-8") as handle:
+                    handle.write(page.content())
+        except Exception as capture_err:
+            print(f"Failed to capture evidence: {capture_err}")
+            return None, None
+        return screenshot_file, dom_file
 
     def execute(self, flow: Flow, headless: bool = True) -> FlowResult:
         self.browser_manager.start(headless=headless)
         context = self.browser_manager.new_context()
+        context.add_init_script(VITALS_SCRIPT)
         page = context.new_page()
 
         step_results = []
         flow_start_time = datetime.now()
         success = True
         error_msg = None
+        vitals = {"lcp_ms": None, "fcp_ms": None, "cls": 0.0}
 
         try:
             for i, step in enumerate(flow.steps):
@@ -34,34 +83,38 @@ class FlowExecutor:
                 step_error = None
                 screenshot_file = None
                 dom_file = None
+                reason = None
 
                 try:
                     self._execute_step(page, step)
+                    if step.action == ActionType.OPEN_URL:
+                        self._merge_vitals(page, vitals)
                 except Exception as e:
                     step_status = "FAIL"
                     success = False
                     step_error = str(e)
                     error_msg = f"Step {i} ({step.action}) failed: {step_error}"
-                    
-                    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                    screenshot_file = os.path.join(
-                        self.output_dir, f"error_{self.probe_id}_step_{i}_{stamp}.png"
-                    )
-                    dom_file = os.path.join(
-                        self.output_dir, f"error_{self.probe_id}_step_{i}_{stamp}.html"
-                    )
-
-                    try:
-                        page.screenshot(path=screenshot_file)
-                        with open(dom_file, "w", encoding="utf-8") as f:
-                            f.write(page.content())
-                    except Exception as capture_err:
-                        print(f"Failed to capture evidence: {capture_err}")
-
+                    reason = "error"
+                    screenshot_file, dom_file = self._capture(page, "error", i, with_dom=True)
                     # Break loop on failure
 
                 step_end = time.time()
                 duration = (step_end - step_start) * 1000
+
+                if step_status == "OK" and step.action != ActionType.WAIT:
+                    # El recorrido de referencia deja constancia de cómo se ve el
+                    # flujo cuando funciona: sin ese contraste, una captura de
+                    # error no dice qué debería haber aparecido en pantalla.
+                    if self._reference_pending:
+                        reason = "reference"
+                        screenshot_file, _ = self._capture(page, "reference", i)
+                    elif (self.slow_step_ms and duration >= self.slow_step_ms
+                          and self._slow_shots < MAX_SLOW_SHOTS):
+                        # Un paso de 15 s que no falla es tan interesante como uno
+                        # que sí, y hasta ahora no dejaba ninguna evidencia visual.
+                        reason = "slow"
+                        self._slow_shots += 1
+                        screenshot_file, _ = self._capture(page, "slow", i)
 
                 result = StepResult(
                     step_index=i,
@@ -71,6 +124,7 @@ class FlowExecutor:
                     start_time=step_start,
                     duration_ms=duration,
                     error_message=step_error,
+                    capture_reason=reason if screenshot_file else None,
                     screenshot_path=screenshot_file,
                     dom_snapshot_path=dom_file,
                     dom=self._capture_dom_metrics(page),
@@ -87,6 +141,10 @@ class FlowExecutor:
         finally:
             nav_timings = self._capture_nav_timings(page)
             final_dom = self._capture_dom_metrics(page)
+            self._merge_vitals(page, vitals)
+            # El recorrido de referencia se arma una sola vez por corrida: repetirlo
+            # en cada iteración multiplicaría las imágenes sin agregar información.
+            self._reference_pending = False
             context.close()
 
         flow_end_time = datetime.now()
@@ -103,7 +161,37 @@ class FlowExecutor:
             error=error_msg,
             nav_timings=nav_timings,
             final_dom=final_dom,
+            web_vitals=WebVitals(
+                lcp_ms=vitals["lcp_ms"],
+                fcp_ms=vitals["fcp_ms"],
+                cls=round(vitals["cls"], 4) if vitals["cls"] else None,
+            ) if vitals["lcp_ms"] or vitals["fcp_ms"] or vitals["cls"] else None,
         )
+
+    def _merge_vitals(self, page, vitals: dict) -> None:
+        """Acumula LCP/FCP/CLS de la navegación actual.
+
+        El script se reinstala en cada page.goto, así que hay que leerlo
+        inmediatamente después de abrir una URL: si se espera al final del
+        journey, solo queda el de la última página.
+        """
+        sample = self._read_vitals(page)
+        if not sample:
+            return
+        if sample.get("lcp") is not None:
+            previous = vitals["lcp_ms"]
+            vitals["lcp_ms"] = sample["lcp"] if previous is None else max(previous, sample["lcp"])
+        if sample.get("fcp") is not None and vitals["fcp_ms"] is None:
+            vitals["fcp_ms"] = sample["fcp"]
+        if sample.get("cls"):
+            vitals["cls"] = (vitals["cls"] or 0) + sample["cls"]
+
+    @staticmethod
+    def _read_vitals(page) -> Optional[dict]:
+        try:
+            return page.evaluate("() => window.__argosVitals || null")
+        except Exception:
+            return None
 
     def _capture_dom_metrics(self, page) -> Optional[DomMetrics]:
         try:

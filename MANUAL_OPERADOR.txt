@@ -1,0 +1,1538 @@
+===============================================================================
+                     A R G O S  -  M A N U A L   D E L   O P E R A D O R
+              Generador de carga con sondas Playwright + Live Room
+===============================================================================
+
+Este documento es para la persona que ejecuta las pruebas. Va en orden: primero
+entender la herramienta, después correrla en tu máquina, después en un servidor
+y al final una prueba de estrés real con 10 servidores en paralelo.
+
+Todos los comandos de aquí están probados. Si uno falla, revisa la sección 13.
+
+
+-------------------------------------------------------------------------------
+ÍNDICE
+-------------------------------------------------------------------------------
+
+  1. Qué es ARGOS y por qué está partido en dos piezas
+  2. Instalación en tu máquina
+  3. Tu primera prueba en tres comandos
+  4. Cómo se escribe un flujo (YAML)
+  5. El runner: todas las opciones
+  6. El collector y el dashboard
+  7. Cómo leer el dashboard
+  8. Cómo leer el informe de carga
+  9. Instalación en un servidor
+ 10. Prueba de estrés real con 10 servidores
+ 11. Cuántas sondas caben por servidor
+ 12. Metodología: cómo se hace una prueba de estrés en serio
+ 13. Problemas frecuentes
+ 14. Referencia rápida de comandos
+ 15. Glosario de métricas
+
+
+-------------------------------------------------------------------------------
+1. QUÉ ES ARGOS Y POR QUÉ ESTÁ PARTIDO EN DOS PIEZAS
+-------------------------------------------------------------------------------
+
+ARGOS abre navegadores Chromium reales contra un sitio web y mide lo que mide
+un usuario de verdad: cuánto tardó cada click, cuándo llegó el primer byte,
+cuánto pesa el DOM, qué pasos fallaron y con qué error.
+
+No simula peticiones HTTP sueltas. Ejecuta el navegador completo, con su
+JavaScript, sus imágenes y sus animaciones. Por eso los números son creíbles
+ante un cliente, y por eso consume bastante CPU (ver sección 11).
+
+Son dos programas independientes:
+
+  RUNNER (runner.py)
+      Es el generador de carga. Lanza N sondas en paralelo, cada una en su
+      propio proceso, cada una con su navegador. Repite el flujo una y otra vez
+      durante el tiempo que le pidas. Guarda todo en disco y, si le das la URL
+      de un collector, va reportando en vivo.
+
+  COLLECTOR (argos.controller.server)
+      Es el servidor de monitoreo: recibe los datos de todos los generadores,
+      los guarda en SQLite y sirve el dashboard web (el "Live Room") y los
+      informes en HTML y PDF.
+
+Están separados a propósito. El runner quema CPU; el collector casi no consume
+nada. En una prueba grande vas a tener 10 máquinas potentes corriendo runners
+y una máquina chica corriendo el collector. Si los mezclas, el dashboard se
+pone lento justo cuando más lo necesitas mirar.
+
+El runner funciona perfectamente SIN collector: guarda todo en results/ y te
+imprime el resumen por pantalla. El collector es opcional, pero es lo que te
+da los gráficos.
+
+Cómo se hablan:
+
+  El runner envía al collector cada 5 segundos un "heartbeat" (cuántas
+  iteraciones lleva, cuántas fallaron, p50, p95, y el consumo de CPU/RAM de la
+  máquina) y cada 1 segundo los journeys terminados con sus pantallazos. Al
+  final envía un resumen consolidado. Todo por HTTP POST.
+
+
+-------------------------------------------------------------------------------
+2. INSTALACIÓN EN TU MÁQUINA
+-------------------------------------------------------------------------------
+
+Requisitos: Linux (Ubuntu/Debian probado), Python 3.8 o superior, y unos 2 GB
+libres para Chromium.
+
+Opción A: el script hace todo (recomendado)
+
+    cd ~/ARGOS
+    ./deploy/setup.sh
+
+El script instala los paquetes del sistema, crea el entorno virtual, instala
+las dependencias de Python, baja Chromium con sus librerías y al final verifica
+que todo funcione. Te va a imprimir algo como:
+
+    chromium: ok
+    fuente PDF: ok
+    recursos: 8 vCPU, 15866 MB RAM
+    sondas recomendadas por RAM disponible: ~71
+
+Opción B: paso a paso, si quieres entender qué hace
+
+    sudo apt-get update
+    sudo apt-get install -y python3-venv python3-pip fonts-dejavu-core git
+    cd ~/ARGOS
+    python3 -m venv venv
+    ./venv/bin/pip install --upgrade pip
+    ./venv/bin/pip install -r requirements.txt
+    ./venv/bin/playwright install --with-deps chromium
+
+Sobre fonts-dejavu-core: no es opcional. Sin esa fuente el PDF pierde las
+tildes y la eñe, y el informe que le mandas al cliente sale con caracteres
+rotos.
+
+Activar el entorno (o usa las rutas ./venv/bin/... directo, da lo mismo):
+
+    source venv/bin/activate
+
+Verificar que quedó bien:
+
+    ./venv/bin/python -c "from playwright.sync_api import sync_playwright; \
+        p=sync_playwright().start(); b=p.chromium.launch(); b.close(); \
+        print('chromium ok')"
+
+
+-------------------------------------------------------------------------------
+3. TU PRIMERA PRUEBA EN TRES COMANDOS
+-------------------------------------------------------------------------------
+
+Terminal 1 - levanta el collector:
+
+    cd ~/ARGOS
+    ./venv/bin/python -m argos.controller.server --port 8080
+
+Terminal 2 - lanza una carga pequeña:
+
+    cd ~/ARGOS
+    ./venv/bin/python runner.py \
+        --users 2 \
+        --duration 1m \
+        --flow flows/example.yaml \
+        --controller-url http://127.0.0.1:8080 \
+        --instance-id gen-01
+
+Navegador - abre el dashboard:
+
+    http://127.0.0.1:8080
+
+Vas a ver la tarjeta "gen-01" aparecer en la sesión en vivo dentro de los
+primeros 5 segundos, y sus contadores subiendo. Cuando el runner termine,
+anda a la pestaña "Ejecuciones", entra a la corrida y mira los gráficos.
+
+IMPORTANTE sobre el comando multilínea: la barra invertida al final de cada
+línea NO puede llevar un espacio después. Si lo lleva, bash corta el comando
+ahí y te sale un error de argumentos.
+
+
+-------------------------------------------------------------------------------
+4. CÓMO SE ESCRIBE UN FLUJO (YAML)
+-------------------------------------------------------------------------------
+
+Un flujo es la receta que repite cada sonda. Vive en flows/ y tiene esta forma:
+
+    name: "Nombre corto que sale en los informes"
+    description: >
+      Texto largo opcional. Sirve para que el que lea el informe en seis meses
+      entienda qué se estaba probando.
+
+    steps:
+      - action: open_url
+        value: "https://www.ejemplo.cl/"
+        timeout: 30000
+        description: "Abrir home"
+
+CAMPOS DE UN PASO
+
+    action        Obligatorio. Uno de: open_url, click, input, assert, wait
+    value         El dato del paso. URL para open_url, texto para input,
+                  milisegundos para wait.
+    selector      Selector CSS del elemento. Ej: 'a[href="/contacto"]'
+    xpath         Alternativa al selector, en XPath.
+    timeout       Milisegundos antes de dar el paso por fallido. Default 30000.
+    description   Texto que aparece en el dashboard, en los gráficos y en el
+                  PDF. ESCRÍBELO SIEMPRE. Sin descripción, el informe dice
+                  "click" y el cliente no entiende nada; con descripción dice
+                  "Ir a Contacto".
+
+LAS CINCO ACCIONES
+
+    open_url      Navega a value. Espera hasta domcontentloaded, no hasta que
+                  termine de cargar todo.
+    click         Hace click en el elemento de selector o xpath.
+    input         Escribe value dentro del elemento de selector o xpath.
+    assert        Espera a que el elemento esté VISIBLE. Es tu validación: si
+                  el elemento no aparece dentro del timeout, el paso falla.
+    wait          Pausa. No toca el navegador.
+
+EL THINK TIME (la parte que casi todos hacen mal)
+
+El paso wait acepta dos formatos:
+
+    - action: wait
+      value: "5000"              <- pausa fija de 5 segundos
+
+    - action: wait
+      value: "4000-9000"         <- pausa aleatoria entre 4 y 9 segundos
+
+Usa SIEMPRE el rango. Con una pausa fija todas las sondas quedan sincronizadas
+y golpean el sitio en oleadas: 20 requests de golpe, después 9 segundos de
+silencio, después otras 20. Eso no se parece a usuarios reales y te da métricas
+falsas, normalmente peores de lo que la realidad sería.
+
+Con el rango, el sorteo se hace de nuevo en CADA iteración de CADA sonda, así
+que a los pocos ciclos las sondas se desfasan solas y la carga queda pareja.
+
+Sin ningún wait, cada sonda navega sin parar y consume cerca de 0,9 vCPU. Ese
+ritmo no lo tiene ningún humano: satura tu propio generador y terminas midiendo
+la contención de CPU de tu máquina en vez del sitio objetivo.
+
+QUÉ PASA CUANDO UN PASO FALLA
+
+Tres cosas, en este orden:
+
+  1. Se guarda un pantallazo PNG y el HTML completo de la página en ese
+     instante, dentro del directorio de resultados.
+  2. Ese journey SE CORTA. Los pasos siguientes no se ejecutan.
+  3. La sonda arranca un journey nuevo desde cero.
+
+El punto 2 explica algo que confunde al principio: en el gráfico "pasos
+correctos e incorrectos" vas a ver que los pasos posteriores al que falla
+tienen MENOS ejecuciones. No es un error del informe, es la consecuencia lógica
+de haber cortado el journey.
+
+VALIDAR UN FLUJO ANTES DE LANZARLO
+
+Corre 1 sonda por 1 segundo. Como la primera iteración siempre se ejecuta
+completa aunque el tiempo se acabe, alcanza para ver si los selectores están
+bien:
+
+    ./venv/bin/python runner.py --users 1 --duration 1s --flow flows/mio.yaml
+
+Si tienes entorno gráfico, agrégale --headed y vas a ver el navegador haciendo
+los pasos. Es la forma más rápida de descubrir que un selector cambió.
+
+
+-------------------------------------------------------------------------------
+5. EL RUNNER: TODAS LAS OPCIONES
+-------------------------------------------------------------------------------
+
+    ./venv/bin/python runner.py [opciones]
+
+    --flow RUTA              OBLIGATORIO. Ruta al YAML del flujo.
+    --users N                Cantidad de sondas en paralelo. Default 1.
+    --duration TIEMPO        Cuánto dura. Formato: 30s, 5m, 1h. Default 10s.
+    --output DIR             Dónde guardar. Default: results
+    --headed                 Muestra la ventana del navegador. Solo para
+                             depurar y solo si tienes entorno gráfico.
+    --controller-url URL     Collector al que reportar. Ej: http://10.0.0.5:8080
+                             Se puede pasar por variable: ARGOS_CONTROLLER_URL
+    --instance-id NOMBRE     Cómo se llama este generador en el dashboard.
+                             Default: el hostname de la máquina.
+                             Variable: ARGOS_INSTANCE_ID
+    --slow-shot MS           Captura pantalla de los pasos que terminen bien
+                             pero tarden más de MS milisegundos. Default 0
+                             (apagado). Ej: --slow-shot 5000
+    --no-reference           No captura el recorrido de referencia del flujo
+                             correcto. Por omisión sí se captura.
+
+Sobre --slow-shot: un paso lento que no falla no aparece como error en ninguna
+métrica, pero para el usuario es igual de malo. Esta opción deja la evidencia
+visual. Solo se guardan 5 capturas por sonda como máximo, porque cada imagen
+viaja en base64 hasta el collector y una corrida degradada con 100 sondas
+saturaría la red antes que el sitio bajo prueba.
+
+Sobre el recorrido de referencia: lo captura únicamente la primera sonda
+(probe-01) en su primera iteración, una imagen por paso. Con 100 usuarios
+serían 100 copias idénticas del mismo flujo correcto, así que las demás sondas
+ni lo intentan. Es lo que después aparece en el informe como el "así se ve
+cuando funciona" contra el que se leen las capturas de error.
+
+Sobre --duration: es la duración de la VENTANA de generación, no el tiempo
+total. Cuando la ventana se cierra, cada sonda termina el journey que tenía en
+curso antes de salir. Con think times largos, el proceso puede tardar hasta un
+minuto más que lo pedido. Es normal, no lo mates.
+
+Sobre --instance-id: en una prueba con varios servidores es OBLIGATORIO en la
+práctica. Si no lo pones, cada máquina reporta con su hostname, y si dos
+hostnames se repiten (pasa con imágenes clonadas) los datos se mezclan y el
+informe queda inservible.
+
+QUÉ DEJA EN DISCO
+
+    results/run_20260817_162346/
+        consolidated_metrics.json         Todos los journeys crudos, completos.
+        summary.json                      Estadísticas ya calculadas.
+        error_probe-01_step_6_*.png       Pantallazo del momento del error.
+        error_probe-01_step_6_*.html      DOM completo en ese instante.
+        reference_probe-01_step_3_*.png   Recorrido de referencia, un archivo
+                                          por paso del flujo correcto.
+        slow_probe-02_step_0_*.png        Paso lento que no falló (--slow-shot).
+
+El run_id se arma con la fecha y hora de inicio en la máquina que lo lanzó.
+Cada servidor genera el suyo, así que 10 servidores producen 10 run_id
+distintos aunque arranquen a la vez.
+
+VARIABLES DE ENTORNO
+
+    ARGOS_CONTROLLER_URL     Equivale a --controller-url
+    ARGOS_INSTANCE_ID        Equivale a --instance-id
+    ARGOS_TOKEN              Token compartido. Si está definido en el runner Y
+                             en el collector, los envíos van autenticados. Si
+                             está en el collector y no en el runner, el
+                             collector rechaza los datos con 401.
+
+
+-------------------------------------------------------------------------------
+6. EL COLLECTOR Y EL DASHBOARD
+-------------------------------------------------------------------------------
+
+    ./venv/bin/python -m argos.controller.server [opciones]
+
+    --host HOST      Interfaz donde escucha. Default 0.0.0.0 (todas).
+    --port PUERTO    Default 8080.
+    --db RUTA        Archivo SQLite. Default: data/argos.db
+                     También por variable: ARGOS_DB
+
+Guarda los pantallazos junto a la base, en data/evidence/<run_id>/<sonda>/.
+
+PÁGINAS QUE SIRVE
+
+    /                                       Dashboard (Live Room)
+    /informe?instance=X&run=Y               Informe completo en HTML
+    /informe.pdf?instance=X&run=Y           El mismo informe en PDF
+
+ENDPOINTS DE CONSULTA (útiles para scripts y para depurar)
+
+    /api/live                               Estado actual de todos los
+                                            generadores
+    /api/runs                               Todas las ejecuciones
+    /api/runs?date=2026-08-17               Ejecuciones de una fecha
+    /api/run?instance=X&run=Y               Detalle completo de una corrida
+    /api/resources?instance=X&run=Y         Serie de CPU/RAM de esa corrida
+    /api/reports?date=2026-08-17            Consolidado del día: cuántas
+                                            instancias, cuántos journeys, tasa
+                                            de éxito global, p50 y p95
+    /evidence/<run>/<sonda>/<archivo>       Pantallazo o DOM guardado
+
+Ejemplos de uso desde la terminal:
+
+    curl -s http://127.0.0.1:8080/api/live | python3 -m json.tool
+
+    curl -s "http://127.0.0.1:8080/api/reports?date=2026-08-17" \
+        | python3 -m json.tool
+
+    curl -o informe.pdf \
+        "http://127.0.0.1:8080/informe.pdf?instance=gen-01&run=RUN_ID"
+
+ENDPOINTS DE INGESTA (los usa el runner, tú no los llamas a mano)
+
+    POST /ingest/heartbeat      Cada 5 segundos
+    POST /ingest/results        Cada 1 segundo
+    POST /ingest/summary        Al terminar
+
+PONERLE CONTRASEÑA
+
+Si el collector queda expuesto a internet, define el mismo token en los dos
+lados. Sin esto, cualquiera que llegue al puerto puede inyectar datos falsos:
+
+    # en el collector
+    export ARGOS_TOKEN=un-secreto-largo
+    ./venv/bin/python -m argos.controller.server --port 8080
+
+    # en cada generador
+    export ARGOS_TOKEN=un-secreto-largo
+    ./venv/bin/python runner.py ...
+
+Ojo: el token protege la ESCRITURA. El dashboard y los informes siguen siendo
+de lectura pública. Si necesitas cerrarlos, ponlo detrás de un firewall o de un
+nginx con autenticación básica.
+
+COMO SERVICIO DEL SISTEMA (para que sobreviva a reinicios)
+
+    ./deploy/setup.sh --with-collector
+
+Eso crea el servicio argos-collector escuchando en el 8080. Después:
+
+    sudo systemctl status argos-collector      # ver si está vivo
+    sudo systemctl restart argos-collector     # reiniciar
+    sudo systemctl stop argos-collector        # detener
+    sudo journalctl -u argos-collector -f      # ver los logs en vivo
+
+REINICIA EL COLLECTOR DESPUÉS DE CADA git pull. Python mantiene los módulos en
+memoria: si actualizas el código y no reinicias, el dashboard te sigue
+mostrando la versión vieja y vas a perder media hora buscando un bug que ya
+arreglaste.
+
+
+-------------------------------------------------------------------------------
+7. CÓMO LEER EL DASHBOARD
+-------------------------------------------------------------------------------
+
+El dashboard tiene tres pestañas arriba a la derecha y una cuarta vista a la
+que se entra haciendo click.
+
+CÓMO PIENSA EL OPERADOR (léelo antes de mirar la pantalla)
+
+    Una PRUEBA DE ESTRÉS es UNA CARGA: la lanzas a una hora, con 1 generador
+    o con hasta 10 a la vez. Eso es UN bloque, no diez ni doscientas sondas.
+
+        Carga  (fecha + hora de arranque)
+          └── Generador  gen-01 … gen-10   (máquinas)
+                └── Sondas  probe-01 …     (robots, adentro)
+
+    Si arrancas 10 servidores juntos, el dashboard los junta en una sola
+    carga porque coinciden en fecha y hora (ventana de 8 minutos). Las
+    sondas no salen en la portada: se abren dentro de cada generador.
+
+CARGA EN CURSO
+
+Es lo que miras MIENTRAS la prueba corre. Arriba ves UNA carga (o las que
+estén superpuestas). Dentro, una fila por generador: CPU, memoria, OK/FAIL.
+Las sondas (robots Z-Load) se despliegan con "Ver sondas de este generador".
+
+Un generador se considera en línea si mandó un heartbeat en los últimos 15
+segundos. Si uno se queda "sin conexión" a mitad de prueba, ese servidor se
+cayó: anótalo, porque sus datos van a estar incompletos. La carga sigue
+mostrando el resto de generadores.
+
+Qué vigilar aquí, en orden de importancia:
+
+  1. Que la CPU de los generadores no pase de 70-75%. Si se va a 90%, tus
+     números ya no miden el sitio, miden tu propia saturación.
+  2. Que la tasa de error se mantenga estable. Si empieza a subir, el sitio
+     está cediendo: ese es el dato de la prueba.
+  3. Que el p95 no se dispare mientras el p50 se queda quieto. Eso significa
+     que unos pocos usuarios la están pasando muy mal aunque el promedio se
+     vea bien.
+
+  "Informe consolidado" abre el conjunto de esa carga (los 10 generadores
+  como una sola prueba). Click en un generador abre solo esa máquina.
+
+GLOSARIO
+
+La pestaña "Glosario" explica cada métrica, cómo se calcula y cómo leerla.
+Úsala cuando un número del informe no te cierre. El mismo contenido está
+desarrollado en la sección 15 de este manual.
+
+CARGAS (HISTÓRICO)
+
+El histórico agrupa por FECHA y HORA de ejecución. Filtras el día y ves
+bloques "Carga · martes 18 ago · 19:10", no una tarjeta por sonda ni una
+por servidor.
+
+Con 10 servidores a las 19:10 vas a ver UNA carga con 10 generadores
+adentro. A las 20:05, si subiste el escalón, ves OTRA carga. Marca dos
+cargas y pulsa "Comparar cargas" para ver la curva entre escalones.
+
+DETALLE DE UNA CORRIDA
+
+Aquí están los gráficos y las tablas. Arriba a la izquierda el botón "Volver",
+y a la derecha dos botones: "Informe PDF" (descarga directa) y "Vista informe"
+(abre el informe completo en una pestaña nueva, que es el que le mandas al
+cliente).
+
+
+-------------------------------------------------------------------------------
+8. CÓMO LEER EL INFORME DE CARGA
+-------------------------------------------------------------------------------
+
+El informe (botón "Vista informe") abre con un resumen ejecutivo redactado
+automáticamente y un veredicto: Estable, Con observaciones o Degradado. Debajo
+vienen los gráficos. Esto es lo que cada uno te dice:
+
+ANTES QUE NADA: TIEMPO ACTIVO CONTRA DURACIÓN TOTAL
+
+    Es la distinción más importante del informe y la que más se malinterpreta.
+
+    La DURACIÓN TOTAL de un journey incluye los pasos "wait", que son las
+    pausas que TÚ escribiste en el flujo para simular a un usuario leyendo.
+    En un flujo realista de 5 páginas esas pausas se llevan el 85 o 90% del
+    total. Si reportas ese número estás midiendo tus propios sleeps.
+
+    El TIEMPO ACTIVO descuenta las pausas y deja solo lo que el sitio hizo
+    esperar al usuario. Ese es el número que va al cliente, y por eso encabeza
+    la tabla de métricas y es el que usan los KPI y el Apdex.
+
+    Ejemplo real: una corrida marcó 46,33 s de duración total y 2,46 s de
+    tiempo activo. Los 43,87 s restantes eran think time.
+
+RENDIMIENTO Y ERRORES DURANTE LA EJECUCIÓN
+    Barras azules: cuántos journeys alcanzó a completar el sitio en cada
+    ventana de tiempo. Línea roja (eje derecho): la tasa de error de esa misma
+    ventana.
+    Qué buscar: el punto de quiebre. Mientras subes usuarios, las barras deben
+    subir con ellos. Cuando las barras se aplanan pero la carga sigue creciendo,
+    el sitio llegó a su techo. Si además despega la línea roja, ya lo pasaste.
+
+PERCENTILES A LO LARGO DEL TIEMPO
+    La mediana (p50), el p95 y el p99 por ventana de tiempo.
+    Qué buscar: que las tres líneas se muevan juntas. Cuando el p50 se mantiene
+    plano pero el p95 y el p99 se disparan, la mayoría no nota nada mientras un
+    grupo pequeño de usuarios la está pasando muy mal. Ese caso no lo detecta
+    ningún promedio.
+
+APDEX
+    Un solo número entre 0 y 1 que resume la satisfacción del usuario contra un
+    umbral de 4 segundos de tiempo activo. Cuenta como satisfecho quien esperó
+    menos del umbral, como tolerante quien esperó hasta cuatro veces esa cifra
+    (16 s), y como frustrado el resto.
+    Qué buscar: sobre 0,94 es bueno, bajo 0,85 hay un problema real. Es la
+    métrica que un gerente entiende sin que se la expliquen.
+
+EN QUÉ SE VA LA CARGA DE LA PÁGINA
+    Descompone la navegación en sus fases: DNS, conexión TCP, espera del
+    servidor, descarga y parseo del HTML, scripts y recursos.
+    Qué buscar: quién domina. Si manda la espera del servidor, el problema está
+    en el backend y no lo arregla ningún cambio de frontend. Si mandan el
+    parseo y los scripts, es al revés. Esto convierte "el sitio está lento" en
+    una instrucción concreta para el equipo de desarrollo.
+
+DURACIÓN DEL FLUJO DURANTE LA EJECUCIÓN
+    Cada punto es un journey, en orden cronológico. La línea punteada es el
+    p95. Los puntos rojos son journeys que fallaron.
+    Qué buscar: una línea PLANA significa que el sitio aguantó. Una línea que
+    sube con el tiempo significa que el sitio se va degradando a medida que se
+    acumula la carga, que es exactamente lo que una prueba de estrés busca
+    detectar.
+
+DISTRIBUCIÓN DE LOS TIEMPOS DE RESPUESTA
+    Un histograma: cuántos journeys cayeron en cada rango.
+    Qué buscar: si la mayoría está agrupada a la izquierda, el sitio responde
+    parejo. Una cola larga hacia la derecha significa que hay un grupo de
+    usuarios sufriendo. Los valores extremos se muestran aparte en una barra
+    roja, para que un solo timeout no aplaste el resto del gráfico.
+
+FLUJOS CORRECTOS E INCORRECTOS
+    La tasa de éxito en una dona. Es el número que el cliente mira primero.
+
+DÓNDE SE VA EL TIEMPO DEL FLUJO
+    El p95 de cada paso. La barra ámbar es el cuello de botella.
+    Qué buscar: el paso más largo es dónde hay que optimizar. Si un paso se
+    lleva el 50% del tiempo, arreglar ese paso vale más que arreglar los otros
+    nueve juntos.
+
+PASOS CORRECTOS E INCORRECTOS
+    Verde las ejecuciones que pasaron, rojo las que fallaron.
+    Qué buscar: en qué paso exacto se rompe el flujo. Recuerda que los pasos
+    posteriores al que falla tienen menos ejecuciones porque el journey se
+    cortó.
+
+TIPOS DE ERROR DETECTADOS
+    Clasificación automática: Timeout, Red/DNS, Selector/elemento, Assert,
+    Click, Otro.
+    Qué buscar: "Timeout" y "Red/DNS" apuntan al sitio bajo prueba.
+    "Selector/elemento" normalmente apunta a que TU flujo está desactualizado
+    porque el sitio cambió el HTML. No confundas un flujo roto con un sitio
+    caído.
+
+COMPARATIVA ENTRE SONDAS
+    El p95 de cada sonda dentro de ese generador.
+    Qué buscar: valores parejos. Si una sonda tiene el doble de p95 que las
+    demás, algo raro pasó con ella y conviene revisarla antes de presentar los
+    números.
+
+CONSUMO DEL GENERADOR DE CARGA
+    CPU y memoria de la máquina que corrió las sondas.
+    Qué buscar: esto es tu coartada. Si la CPU se mantuvo bajo 70%, puedes
+    afirmar con confianza que los tiempos medidos son del sitio. Si se fue a
+    95%, parte de la lentitud es tuya y el informe pierde valor.
+
+CARGA DEL SISTEMA
+    El load average de un minuto: cuántos procesos están esperando CPU.
+    Qué buscar: si supera la cantidad de núcleos de la instancia, el generador
+    se quedó corto. Con 8 vCPU, un load de 8 ya es el límite.
+
+Más abajo del informe vienen las tablas con todos los percentiles (p50, p90,
+p95, p99) y el detalle paso a paso, seguidos de la evidencia visual.
+
+LA EVIDENCIA VISUAL
+
+    RECORRIDO DE REFERENCIA
+        Una miniatura por cada paso del flujo cuando termina correctamente,
+        capturada por la primera sonda al inicio de la corrida. Es el "así se
+        ve cuando funciona".
+        Para qué sirve: sin este contraste, una captura de error es una imagen
+        suelta que no dice qué DEBERÍA haberse visto en pantalla. Con las dos
+        lado a lado el cliente entiende el problema sin que se lo expliques.
+        Se genera solo. Para desactivarlo: --no-reference.
+
+    PASOS LENTOS QUE NO FALLARON
+        Capturas de pasos que terminaron OK pero tardaron más de lo que le
+        pasaste en --slow-shot.
+        Para qué sirve: un paso de 15 segundos que no falla no aparece como
+        error en ninguna métrica, pero para el usuario es igual de malo. Hasta
+        ahora no dejaba ninguna evidencia visual.
+        Está apagado por omisión. Actívalo con --slow-shot 5000 (en ms). Se
+        capturan como máximo 5 por sonda para no saturar la red: cada imagen
+        viaja en base64 hasta el collector.
+
+    EVIDENCIAS DE ERROR
+        Agrupadas por tipo de error, no en una lista plana. Cada grupo muestra
+        cuántas veces ocurrió, en qué pasos, un mensaje de ejemplo y hasta 6
+        miniaturas.
+        Para qué sirve: en una prueba real con 200 usuarios los fallos se
+        cuentan por cientos y casi todos repiten el mismo problema. Agrupados,
+        de una sola mirada sabes cuántos problemas DISTINTOS hay.
+
+PARA ENTREGARLE AL CLIENTE
+
+    Opción 1: el botón "Descargar PDF" del informe.
+    Opción 2: el botón "Guardar PDF" (imprime desde el navegador). Este sale
+              más lindo porque incluye los gráficos en color y los pantallazos.
+
+
+COMPARAR CORRIDAS Y CONSOLIDAR GENERADORES
+
+En la pestaña "Ejecuciones" cada corrida tiene una casilla arriba a la
+izquierda. Marca dos o más y pulsa "Comparar y consolidar". Se abre una vista
+que resuelve dos necesidades distintas con el mismo mecanismo:
+
+    COMPARAR ESCALONES
+        Marca las corridas de 25, 50, 100 y 200 usuarios de una misma jornada.
+        La "curva de carga" grafica el p95 del tiempo activo contra la cantidad
+        de usuarios, con la tasa de error superpuesta. Mientras la línea azul se
+        mantiene plana el sitio absorbe la carga; donde se dispara está el
+        límite. Esa curva es lo que justifica una cifra de capacidad ante el
+        cliente, y hasta ahora había que deducirla abriendo informes en
+        pestañas separadas.
+        (La curva solo aparece si las corridas tienen distinta cantidad de
+        usuarios: con todas iguales no hay tendencia que mostrar.)
+
+    CONSOLIDAR LOS 10 GENERADORES
+        Marca las 10 corridas simultáneas, una por servidor. El bloque
+        "Consolidado" trata todas las sondas como una sola prueba: journeys
+        totales, tasa de éxito global, percentiles sobre el conjunto y todos
+        los gráficos del informe normal.
+        Por qué importa: cada generador reporta su propio run_id y por separado
+        solo ve su porción de la carga. El p95 real de la prueba no es el
+        promedio de los diez p95, y esta vista es la única que lo calcula bien.
+
+También funciona directo por URL, útil para automatizar:
+
+    http://TU_IP:8080/comparar?runs=gen-01:run_X,gen-02:run_Y
+
+
+-------------------------------------------------------------------------------
+9. INSTALACIÓN EN UN SERVIDOR
+-------------------------------------------------------------------------------
+
+Conectarse:
+
+    ssh root@IP_DEL_SERVIDOR
+
+Si te pide clave y no la tienes, o te rechaza con "Permission denied
+(publickey)", hay que cargar tu llave pública. La tuya está en:
+
+    cat ~/.ssh/id_ed25519.pub
+
+Si no existe, créala con: ssh-keygen -t ed25519
+Después esa línea completa se agrega al archivo ~/.ssh/authorized_keys del
+servidor. Eso lo hace quien administre la máquina.
+
+Ya adentro, instalar:
+
+    git clone https://github.com/kodeskia-byte/ARGOS.git
+    cd ARGOS
+    ./deploy/setup.sh
+
+En el servidor que va a hacer de collector, agrega el flag:
+
+    ./deploy/setup.sh --with-collector
+
+El script detecta si estás como root y no usa sudo, porque muchos VPS entregan
+root directo y no traen sudo instalado.
+
+Traer cambios después:
+
+    cd ~/ARGOS
+    git pull
+    sudo systemctl restart argos-collector      # solo en el collector
+
+Si cambiaron las dependencias:
+
+    ./venv/bin/pip install -r requirements.txt
+
+CORRER UNA PRUEBA LARGA SIN QUE SE CORTE AL CERRAR SSH
+
+Este es el error clásico: lanzas una prueba de 2 horas, cierras el notebook, se
+cae la sesión SSH y el proceso muere con ella. Tres formas de evitarlo, de
+mejor a peor:
+
+    # 1. tmux: puedes volver a entrar y ver la pantalla como la dejaste
+    tmux new -s carga
+    ./venv/bin/python runner.py --users 20 --duration 2h \
+        --flow flows/example.yaml \
+        --controller-url http://IP_COLLECTOR:8080 --instance-id gen-01
+    # Ctrl+B y después D para salir dejándolo corriendo
+    tmux attach -t carga      # para volver
+
+    # 2. nohup: más simple, la salida queda en un archivo
+    nohup ./venv/bin/python runner.py --users 20 --duration 2h \
+        --flow flows/example.yaml \
+        --controller-url http://IP_COLLECTOR:8080 --instance-id gen-01 \
+        > carga.log 2>&1 &
+    tail -f carga.log
+
+    # 3. dejarlo en primer plano: solo para pruebas de un par de minutos
+
+ABRIR EL PUERTO DEL COLLECTOR
+
+El puerto 8080 del collector tiene que ser alcanzable desde los 10 generadores
+y desde tu navegador. En AWS es una regla del Security Group. En un VPS con
+ufw:
+
+    sudo ufw allow 8080/tcp
+
+Comprobar desde un generador que llega:
+
+    curl -s http://IP_COLLECTOR:8080/api/live
+
+Si eso responde JSON, estás listo. Si se queda colgado, es firewall.
+
+
+-------------------------------------------------------------------------------
+10. PRUEBA DE ESTRÉS REAL CON 10 SERVIDORES
+-------------------------------------------------------------------------------
+
+ARQUITECTURA
+
+    ┌──────────────────────────────────────────────────────┐
+    │  Tu notebook: lanza los comandos y mira el dashboard │
+    └───────────────┬──────────────────────────────────────┘
+                    │ ssh
+        ┌───────────┴────────────────────────────────┐
+        │                                            │
+    ┌───▼────┐ ┌────────┐ ┌────────┐   ┌────────┐   │
+    │ gen-01 │ │ gen-02 │ │ gen-03 │...│ gen-10 │   │
+    │ runner │ │ runner │ │ runner │   │ runner │   │
+    └───┬────┘ └───┬────┘ └───┬────┘   └───┬────┘   │
+        │          │          │            │        │
+        │  heartbeats cada 5s + journeys   │        │
+        └──────────┴────┬─────┴────────────┘        │
+                        │                           │
+                 ┌──────▼───────┐                   │
+                 │  COLLECTOR   │◄──────────────────┘
+                 │  puerto 8080 │   navegador
+                 │  SQLite      │
+                 └──────┬───────┘
+                        │
+                 ┌──────▼───────────────────────────┐
+                 │  SITIO BAJO PRUEBA               │
+                 │  recibe la carga de los 10 gen.  │
+                 └──────────────────────────────────┘
+
+Los 10 generadores NO se hablan entre sí. Cada uno corre su propio runner con
+su propio flujo idéntico, y todos reportan al mismo collector. La suma la hace
+el dashboard.
+
+PASO 1 - PREPARAR LAS 11 MÁQUINAS
+
+Una vez, en cada una de las 10 generadoras:
+
+    ssh root@IP_GEN_N
+    git clone https://github.com/kodeskia-byte/ARGOS.git && cd ARGOS
+    ./deploy/setup.sh
+
+Y en la del collector (puede ser chica, 1 vCPU y 1 GB alcanzan):
+
+    ssh root@IP_COLLECTOR
+    git clone https://github.com/kodeskia-byte/ARGOS.git && cd ARGOS
+    ./deploy/setup.sh --with-collector
+
+PASO 2 - VERIFICAR QUE TODAS RESPONDEN
+
+Desde tu notebook, con un archivo servidores.txt que tenga una IP por línea:
+
+    for ip in $(cat servidores.txt); do
+        echo -n "$ip -> "
+        ssh -o ConnectTimeout=5 root@$ip \
+            "cd ARGOS && ./venv/bin/python -c 'import argos; print(\"ok\")'" \
+            || echo "FALLA"
+    done
+
+No sigas hasta que las 10 digan ok. Un servidor que falla en este paso va a
+fallar en medio de la prueba, y una prueba de estrés a medias no sirve para
+tomar decisiones.
+
+PASO 3 - PRUEBA DE HUMO (esto no se salta nunca)
+
+Antes de la prueba real, 1 sonda por 30 segundos en cada servidor. Sirve para
+confirmar tres cosas: que el flujo funciona contra el sitio de hoy, que los
+generadores llegan al collector, y que el sitio responde bien sin carga.
+
+    i=1
+    for ip in $(cat servidores.txt); do
+        gen=$(printf "gen-%02d" $i)
+        ssh root@$ip "cd ARGOS && ./venv/bin/python runner.py \
+            --users 1 --duration 30s --flow flows/example.yaml \
+            --controller-url http://IP_COLLECTOR:8080 --instance-id $gen" &
+        i=$((i+1))
+    done
+    wait
+
+Mira el dashboard. Tienen que aparecer las 10 tarjetas con 0% de error. Si hay
+errores AHORA, sin carga, el problema es tu flujo, no el sitio. Arréglalo antes
+de seguir.
+
+PASO 4 - LA PRUEBA REAL, ARRANCANDO TODOS A LA MISMA HORA
+
+Este es el punto delicado. Si lanzas los ssh en un bucle, los servidores
+arrancan con varios segundos de diferencia y la rampa de carga te queda
+escalonada. Para una prueba de estrés seria necesitas que los 10 empiecen
+juntos.
+
+La forma más simple y confiable: acordar una hora de reloj y que cada servidor
+espere hasta esa hora. Los servidores tienen la hora sincronizada por NTP, así
+que esto es preciso al segundo.
+
+    # Define la hora de inicio (formato HH:MM:SS, hora del servidor, en UTC
+    # si tus servidores están en UTC). Dale unos 3 minutos de margen.
+    INICIO="18:30:00"
+    COLLECTOR="http://IP_COLLECTOR:8080"
+
+    i=1
+    for ip in $(cat servidores.txt); do
+        gen=$(printf "gen-%02d" $i)
+        ssh root@$ip "cd ARGOS && nohup bash -c '
+            while [ \$(date +%H:%M:%S) \< \"$INICIO\" ]; do sleep 0.2; done
+            ./venv/bin/python runner.py \
+                --users 20 --duration 30m \
+                --flow flows/example.yaml \
+                --controller-url $COLLECTOR \
+                --instance-id $gen
+        ' > carga.log 2>&1 &" &
+        i=$((i+1))
+    done
+    wait
+    echo "Los 10 generadores esperan el arranque a las $INICIO"
+
+Con 20 sondas por servidor y 10 servidores tienes 200 usuarios concurrentes
+sostenidos durante 30 minutos.
+
+Verifica la hora de los servidores antes, con:
+
+    for ip in $(cat servidores.txt); do ssh root@$ip date; done
+
+PASO 5 - MIRAR LA PRUEBA MIENTRAS CORRE
+
+Abre el dashboard en "Sesión en vivo" y no lo cierres. Las 10 tarjetas deberían
+aparecer casi simultáneamente.
+
+Lo que tienes que vigilar, en este orden:
+
+  1. Que las 10 tarjetas estén en línea. Si una se apaga, ese servidor murió.
+  2. Que la CPU de los generadores esté bajo 75%. Si están al tope, DETÉN la
+     prueba: estás midiendo tus propios servidores, no el sitio.
+  3. Que la tasa de error global empiece en 0% y observa cuándo empieza a
+     subir. Ese momento es el hallazgo principal de la prueba.
+  4. Que el p95 global se mantenga. Cuando se dispara, encontraste el punto de
+     quiebre.
+
+Si necesitas cortar todo de emergencia:
+
+    for ip in $(cat servidores.txt); do
+        ssh root@$ip "pkill -f runner.py" &
+    done
+    wait
+
+PASO 6 - RECOGER LOS RESULTADOS
+
+Cuando termine, en el dashboard:
+
+  - Pestaña "Ejecuciones", filtra por la fecha de hoy. Vas a ver 10 filas, una
+    por generador.
+  - EL INFORME CONSOLIDADO DE LOS 10: marca las 10 casillas (o usa
+    "Seleccionar todas") y pulsa "Comparar y consolidar". Se abre una vista que
+    trata las sondas de los 10 servidores como una sola prueba: journeys
+    totales, tasa de éxito global, percentiles sobre el conjunto completo,
+    Apdex, throughput agregado y todos los gráficos del informe normal.
+
+    Es la vista que corresponde entregar cuando varios generadores atacan el
+    mismo sitio al mismo tiempo. Por separado cada generador solo ve su porción
+    de la carga, y el p95 real de la prueba NO es el promedio de los diez p95.
+
+    Arriba del consolidado queda además la tabla comparativa entre los 10, que
+    es donde se detecta al generador que se salió de la norma.
+
+  - El resumen numérico rápido del día sigue disponible por API:
+
+        curl -s "http://IP_COLLECTOR:8080/api/reports?date=2026-08-17" \
+            | python3 -m json.tool
+
+  - El informe individual con evidencia visual sigue siendo por generador:
+    entra al detalle de cada uno y usa "Vista informe".
+
+QUÉ REVISAR ANTES DE PRESENTAR
+
+Si dos generadores dan resultados muy distintos entre sí, eso es un hallazgo en
+sí mismo y hay que entenderlo antes de mostrar nada. Las causas habituales son
+que una instancia se quedó sin CPU (mira "Consumo del generador" en su informe)
+o que quedó en otra región de red. La tabla comparativa del consolidado lo
+muestra de inmediato.
+
+
+-------------------------------------------------------------------------------
+11. CUÁNTAS SONDAS CABEN POR SERVIDOR
+-------------------------------------------------------------------------------
+
+No hay un número universal. Depende del sitio que pruebes, y bastante.
+
+POR MEMORIA
+
+Cada sonda mantiene un contexto de Chromium vivo: alrededor de 167 MB. El
+script de setup te calcula el techo automáticamente y lo imprime al final:
+
+    sondas recomendadas por RAM disponible: ~71
+
+Ese cálculo deja un 25% de RAM libre para el sistema.
+
+POR CPU (que es el límite real)
+
+La CPU se acaba mucho antes que la memoria. Y aquí hay algo que sorprende:
+
+Uno esperaría que durante el think time la sonda no consuma CPU, porque está
+"esperando". No es así. Chromium sigue renderizando la página: animaciones,
+carruseles, videos en loop, efectos al hacer scroll. En sitios con mucha
+animación, una sonda en think time puede seguir gastando CPU casi como si
+estuviera navegando.
+
+Consecuencia práctica: NO puedes estimar la capacidad en un escritorio y
+extrapolarla. Tienes que medirla con TU flujo contra TU sitio.
+
+CÓMO MEDIRLA BIEN
+
+  1. Lanza 5 sondas por 5 minutos en un servidor.
+  2. Abre el informe y mira el gráfico "Consumo del generador de carga".
+  3. Anota el promedio de CPU. Divídelo por 5: ese es el costo por sonda.
+  4. La cantidad máxima es: (70 / costo_por_sonda), redondeando hacia abajo.
+
+Ejemplo real medido contra un sitio con animaciones: 2 sondas promediaron 70%
+de CPU en una máquina de 8 vCPU, con el load subiendo de 3.9 a 7.6 durante la
+corrida. Eso son unas 35 puntos de CPU por sonda, o sea que esa máquina aguanta
+2 sondas y nada más. Contra un sitio liviano el mismo hardware aguanta veinte
+veces esa cantidad.
+
+REGLAS QUE NO FALLAN
+
+  - Apunta a 70% de CPU promedio, nunca más. El 30% restante es tu margen para
+    los picos.
+  - El load average no debe pasar la cantidad de vCPU de la máquina.
+  - Ante la duda, más servidores con menos sondas cada uno. Es más barato
+    agregar una instancia que descubrir después de la prueba que los números
+    no sirven porque el generador estaba ahogado.
+  - Si necesitas 200 usuarios y mides que cada servidor aguanta 20, necesitas
+    10 servidores. Si aguanta 5, necesitas 40. Haz la medición ANTES de
+    comprometer una fecha con el cliente.
+
+
+-------------------------------------------------------------------------------
+12. METODOLOGÍA: CÓMO SE HACE UNA PRUEBA DE ESTRÉS EN SERIO
+-------------------------------------------------------------------------------
+
+La herramienta es la parte fácil. Esto es lo que separa una prueba que sirve
+para tomar decisiones de una que solo genera ruido.
+
+ANTES
+
+  1. Define qué pregunta quieres responder. No es "vamos a estresar el sitio".
+     Es "¿aguanta 500 usuarios simultáneos el día del lanzamiento?" o "¿en qué
+     punto empieza a degradarse el checkout?". Sin pregunta no hay conclusión.
+
+  2. Avisa. A infraestructura, al proveedor de hosting y al dueño del sitio.
+     Una prueba de carga no anunciada se ve exactamente igual que un ataque, y
+     te pueden bloquear las IP a mitad de camino.
+
+  3. Acuerda la ventana. Fuera de horario comercial salvo que el objetivo sea
+     justamente medir bajo tráfico real.
+
+  4. Toma la línea base. Corre 1 sonda por 5 minutos SIN carga y guarda ese
+     informe. Sin línea base no puedes afirmar que algo se degradó, porque no
+     sabes de dónde partía.
+
+  5. Prueba de humo con los 10 servidores, 1 sonda cada uno. Confirma que el
+     flujo funciona y que la infraestructura de prueba está sana.
+
+DURANTE
+
+  6. Sube por escalones, no de golpe. Una secuencia razonable:
+
+         Escalón 1:   5 sondas x 10 servidores =  50 usuarios, 10 min
+         Escalón 2:  10 sondas x 10 servidores = 100 usuarios, 10 min
+         Escalón 3:  20 sondas x 10 servidores = 200 usuarios, 10 min
+         Escalón 4:  40 sondas x 10 servidores = 400 usuarios, 10 min
+
+     Entre escalón y escalón, 5 minutos de pausa para que el sitio se
+     recupere y puedas separar los efectos de cada nivel.
+
+     Los escalones son lo que te permite decir "aguanta hasta 200 y a los 300
+     se cae". Una sola corrida a 400 solo te permite decir "a 400 se cayó",
+     que es mucho menos útil.
+
+  7. Mira los generadores tanto como el sitio. Si tu CPU se satura, detén,
+     agrega servidores y vuelve a empezar. Los datos de una corrida con el
+     generador ahogado no se pueden salvar después.
+
+  8. Anota la hora de todo lo raro que veas. Después vas a cruzar esas horas
+     con los logs del servidor bajo prueba, y ahí es donde aparece la causa
+     real.
+
+DESPUÉS
+
+  9. Compara los escalones entre sí. El valor está en la comparación, no en un
+     informe suelto. En la pestaña "Ejecuciones" marca las casillas de los
+     cuatro escalones y pulsa "Comparar y consolidar": la "curva de carga" te
+     grafica el p95 contra la cantidad de usuarios y el punto de quiebre queda
+     a la vista sin que tengas que deducirlo.
+
+ 10. Busca el punto de quiebre y descríbelo con números: "hasta 200 usuarios el
+     p95 del tiempo activo se mantuvo bajo 3 segundos con 0% de error; a 300
+     usuarios saltó a 11 segundos y el 8% de los flujos falló por timeout en el
+     paso de Contacto".
+
+     Usa siempre el TIEMPO ACTIVO, no la duración total: esta última incluye el
+     think time que tú mismo definiste y no dice nada del sitio.
+
+ 11. Entrega el cuello de botella, no solo el veredicto. El informe ya te dice
+     qué paso concentra el tiempo activo, y la cascada de navegación te dice si
+     el problema está en el backend (espera del servidor) o en el frontend
+     (parseo y scripts). Eso es lo accionable para el equipo de desarrollo.
+
+ERRORES QUE ARRUINAN UNA PRUEBA
+
+  - Correr sin think time. Genera un patrón de carga que ningún usuario real
+    produce y satura tu propio generador. Los números salen catastróficos y no
+    representan nada.
+  - Confundir un flujo roto con un sitio caído. Si el error dice
+    "Selector / elemento", casi siempre cambió el HTML del sitio y tu YAML
+    quedó viejo. Revisa el pantallazo antes de alarmar a nadie.
+  - Medir desde una sola máquina y presentarlo como "carga distribuida".
+  - Ignorar la CPU del generador y después defender números inflados frente al
+    cliente. El gráfico de recursos está en el informe justamente para que
+    puedas demostrar que eso no pasó.
+  - Probar contra producción sin autorización por escrito.
+
+
+-------------------------------------------------------------------------------
+13. PROBLEMAS FRECUENTES
+-------------------------------------------------------------------------------
+
+"BrowserType.launch: Executable doesn't exist"
+    Falta Chromium. Corre:  ./venv/bin/playwright install --with-deps chromium
+
+"OSError: [Errno 98] Address already in use"
+    El puerto 8080 ya está ocupado por un collector anterior. Mátalo:
+        fuser -k 8080/tcp
+    o busca el proceso:  ss -tlnp | grep 8080
+
+El dashboard no muestra el generador
+    Revisa en este orden:
+      1. Que pasaste --controller-url al runner.
+      2. Que el generador llega al collector:
+             curl -s http://IP_COLLECTOR:8080/api/live
+      3. Que el puerto 8080 está abierto en el firewall.
+      4. Que si definiste ARGOS_TOKEN en el collector, también está definido
+         en el generador. Si no, el collector responde 401 y descarta todo.
+
+El dashboard muestra datos viejos después de un git pull
+    Reinicia el collector. Python cachea los módulos en memoria.
+        sudo systemctl restart argos-collector
+    Y en el navegador haz recarga forzada con Ctrl+Shift+R.
+
+Estoy mirando el puerto equivocado
+    Pasa más de lo que uno cree, sobre todo si dejaste un collector viejo
+    corriendo en otro puerto. Confirma cuál está activo:
+        ss -tlnp | grep python
+
+El PDF sale con caracteres raros en vez de tildes y eñes
+    Falta la fuente:  sudo apt-get install -y fonts-dejavu-core
+
+"Permission denied (publickey)" al conectarte al servidor
+    El servidor solo acepta llave pública y la tuya no está autorizada. Manda
+    el contenido de ~/.ssh/id_ed25519.pub a quien administra la máquina para
+    que la agregue a ~/.ssh/authorized_keys.
+
+El comando multilínea da error de argumentos
+    Hay un espacio después de alguna barra invertida. Bórralo, o escribe el
+    comando en una sola línea.
+
+La prueba se detiene sola cuando cierro el terminal
+    Usa tmux o nohup. Ver sección 9.
+
+Muchos errores "Selector / elemento"
+    El sitio cambió su HTML y tu flujo quedó desactualizado. Abre el pantallazo
+    del error en el informe: vas a ver la página tal como estaba en ese
+    instante y qué elemento faltaba.
+
+El runner demora más que el --duration que le pedí
+    Es lo esperado. La ventana de generación se cierra a tiempo, pero cada
+    sonda termina el journey que tenía en curso. Con think times largos eso
+    puede ser hasta un minuto extra.
+
+
+-------------------------------------------------------------------------------
+14. REFERENCIA RÁPIDA DE COMANDOS
+-------------------------------------------------------------------------------
+
+INSTALACIÓN
+    ./deploy/setup.sh                       Prepara la máquina como generador
+    ./deploy/setup.sh --with-collector      Además instala el collector
+    ./venv/bin/pip install -r requirements.txt      Actualiza dependencias
+    ./venv/bin/playwright install --with-deps chromium
+
+COLLECTOR
+    ./venv/bin/python -m argos.controller.server --port 8080
+    ./venv/bin/python -m argos.controller.server --host 127.0.0.1 --port 8080 \
+        --db /var/lib/argos/argos.db
+    sudo systemctl start|stop|restart|status argos-collector
+    sudo journalctl -u argos-collector -f
+    fuser -k 8080/tcp                       Libera el puerto
+
+EJECUTAR CARGA
+    # validar el flujo
+    ./venv/bin/python runner.py --users 1 --duration 1s \
+        --flow flows/example.yaml
+
+    # ver el navegador (solo con entorno gráfico)
+    ./venv/bin/python runner.py --users 1 --duration 30s \
+        --flow flows/example.yaml --headed
+
+    # prueba local con dashboard
+    ./venv/bin/python runner.py --users 2 --duration 1m \
+        --flow flows/example.yaml \
+        --controller-url http://127.0.0.1:8080 --instance-id gen-01
+
+    # carga en servidor, sobrevive al cierre de SSH
+    nohup ./venv/bin/python runner.py --users 20 --duration 30m \
+        --flow flows/example.yaml \
+        --controller-url http://IP_COLLECTOR:8080 --instance-id gen-01 \
+        > carga.log 2>&1 &
+    tail -f carga.log
+
+    # con evidencia visual completa: recorrido de referencia (automático)
+    # más captura de los pasos que pasen de 5 segundos
+    ./venv/bin/python runner.py --users 10 --duration 10m \
+        --flow flows/example.yaml --slow-shot 5000 \
+        --controller-url http://IP_COLLECTOR:8080 --instance-id gen-01
+
+    # cortar de emergencia
+    pkill -f runner.py
+
+CONSULTAS AL COLLECTOR
+    curl -s http://IP:8080/api/live | python3 -m json.tool
+    curl -s http://IP:8080/api/runs | python3 -m json.tool
+    curl -s "http://IP:8080/api/runs?date=2026-08-17" | python3 -m json.tool
+    curl -s "http://IP:8080/api/run?instance=gen-01&run=run_20260817_162346" \
+        | python3 -m json.tool
+    curl -s "http://IP:8080/api/resources?instance=gen-01&run=RUN_ID" \
+        | python3 -m json.tool
+    curl -s "http://IP:8080/api/reports?date=2026-08-17" | python3 -m json.tool
+    curl -o informe.pdf "http://IP:8080/informe.pdf?instance=gen-01&run=RUN_ID"
+
+EN EL NAVEGADOR
+    http://IP:8080                                      Dashboard
+    http://IP:8080/informe?instance=gen-01&run=RUN_ID   Informe completo
+    http://IP:8080/informe.pdf?instance=gen-01&run=RUN_ID   PDF
+
+    # comparar escalones o consolidar varios generadores
+    http://IP:8080/comparar?runs=gen-01:RUN_A,gen-02:RUN_B
+    (o marca las casillas en la pestaña Ejecuciones y pulsa
+     "Comparar y consolidar")
+
+VARIABLES DE ENTORNO
+    export ARGOS_CONTROLLER_URL=http://IP:8080
+    export ARGOS_INSTANCE_ID=gen-01
+    export ARGOS_TOKEN=un-secreto-largo
+    export ARGOS_DB=/var/lib/argos/argos.db
+
+MANTENIMIENTO
+    git pull                                Traer últimos cambios
+    sudo systemctl restart argos-collector  Obligatorio después del pull
+    du -sh results/ data/                   Cuánto espacio ocupan los datos
+    rm -rf results/run_2026*                Limpiar corridas viejas
+
+SOBRE LA MÁQUINA
+    nproc                                   Núcleos disponibles
+    free -m                                 Memoria
+    uptime                                  Load average
+    top                                     Consumo en vivo
+    pgrep -c chrome                         Procesos de navegador activos
+
+
+-------------------------------------------------------------------------------
+15. GLOSARIO DE MÉTRICAS
+-------------------------------------------------------------------------------
+
+Esta sección es la referencia de cómo el robot Z-Load mide y cómo ARGOS
+agrega esos números. Si un valor del dashboard o del informe no te cierra,
+empieza por aquí. En el Live Room la pestaña "Glosario" tiene el mismo
+contenido, pensado para consultarlo mientras corre la prueba.
+
+REGLA DE ORO
+
+    El número que le entregas al cliente es el TIEMPO ACTIVO (sin pausas
+    wait), no la duración total del journey. El Apdex, los KPI del informe
+    y el p95 que justifica capacidad usan tiempo activo.
+
+    En la SESIÓN EN VIVO el p50/p95 del heartbeat SÍ incluye las pausas
+    (es total_duration_ms). No los compares directo con el P95 activo del
+    informe.
+
+
+CÓMO MIDE EL ROBOT
+------------------
+
+Sonda / unidad Z-Load (probe_id, código ZL-G01-P01)
+    Un navegador Chromium real que recorre el YAML una y otra vez. No es
+    una petición HTTP suelta: ejecuta JavaScript, baja imágenes y anima.
+    El código de reconocimiento es ZL-G{n}-P{m}: n sale de los dígitos de
+    --instance-id (gen-01 → G01) y m de probe-id (probe-03 → P03).
+
+Generador (instance_id)
+    La máquina que lanza las sondas (runner.py). Cada generador reporta su
+    propia corrida (run_id). Con 10 servidores vas a ver 10 corridas para
+    la misma prueba; es correcto.
+
+Journey / flujo (iteración)
+    Una vuelta completa del YAML. Arranca en el primer paso y termina
+    cuando el último sale OK, o se CORTA en el primer FAIL. El journey
+    siguiente parte de cero. Por eso un paso al final del flujo puede
+    tener menos muestras que los del principio.
+
+Paso (step, duration_ms)
+    Una acción del YAML. Se cronometra en el proceso de la sonda:
+
+        duration_ms = (time.time() al terminar − time.time() al empezar) × 1000
+
+Think time (wait, think_ms)
+    Suma de duration_ms de los pasos con action = wait. Son las pausas
+    que TÚ escribiste para simular a un usuario leyendo. No miden el
+    sitio. En un flujo realista se llevan el 85-90% de la duración total.
+
+Tiempo activo (active_ms)
+    Suma de duration_ms de todos los pasos que NO son wait (open_url,
+    click, input, assert). Es lo que el usuario esperó al sitio. Este
+    es el número que va al cliente.
+
+Duración total del journey (total_duration_ms, flow_ms)
+    Reloj de pared del journey entero:
+
+        (end_time − start_time) en milisegundos
+
+    Incluye waits y el overhead del navegador. El heartbeat en vivo
+    calcula su p50/p95 sobre ESTA serie.
+
+
+SESIÓN EN VIVO
+--------------
+
+En línea (online)
+    El generador mandó un heartbeat en los últimos 15 segundos y su
+    status no es "finished". Las "unidades en línea" suman las sondas
+    esperadas (--users) de esos generadores.
+
+Estados del robot
+    SIN CONEXIÓN   el generador no late
+    ARMANDO        el generador late, esa sonda aún no terminó un journey
+    CON FALLOS     esa sonda ya tiene al menos un FAIL
+    EN LÍNEA       hay journeys y fail = 0
+
+Usuarios virtuales
+    Suma de --users de los generadores en línea (no de los que ya
+    terminaron).
+
+Journeys / Correctos / Incorrectos
+    Un journey es correcto (ok) si ningún paso salió FAIL. Incorrecto
+    (fail) si un timeout, un selector que no aparece, un assert o un
+    error de red cortó el flujo.
+
+Tasa de error (error_rate) y tasa de éxito (success_rate)
+
+        error_rate    = fail / (ok + fail)
+        success_rate  = ok   / journeys
+
+    En vivo se calculan solo con los generadores en línea. En el
+    informe, sobre toda la corrida.
+
+P95 flujo (en vivo)
+    Cada runner calcula el p95 de total_duration_ms de SUS journeys y
+    lo manda cada 5 s. El dashboard toma el MÁXIMO entre generadores
+    en línea ("peor generador"), no el promedio ni un p95 agrupado.
+    Incluye think time.
+
+Heartbeat
+    POST /ingest/heartbeat cada 5 segundos: journeys, ok/fail, p50,
+    p95, CPU y RAM. Los journeys detallados van aparte cada 1 s a
+    /ingest/results.
+
+
+ESTADÍSTICOS
+------------
+
+Todas las series (tiempos, bytes, nodos, vitals) se resumen igual.
+Se descartan los null. Si no queda ninguno, la métrica se muestra "—".
+
+    n (count)   cuántos valores entraron
+    min / max   el más chico y el más grande
+    avg         suma / n     (un timeout infla el promedio: no lo uses
+                             como KPI)
+    p50         mediana: la mitad de las muestras duró esto o menos
+    p75         el 75% quedó por debajo (Search Console usa este para
+                Web Vitals)
+    p90 / p95 / p99   cola de latencia. El p95 es el que se reporta
+                      al cliente.
+
+Cómo se interpola un percentil (no se toma "el de la posición p%" a
+lo bruto):
+
+    ordenar los valores v[0] … v[n-1]
+    rank      = (n − 1) × (p / 100)
+    low       = parte entera de rank
+    high      = min(low + 1, n − 1)
+    resultado = v[low] + (v[high] − v[low]) × (rank − low)
+
+Si p99 se aleja mucho de p50 hay una cola de usuarios sufriendo que
+ningún promedio detecta.
+
+
+APDEX Y VEREDICTO
+-----------------
+
+Apdex (Application Performance Index)
+    Un número entre 0 y 1. Umbral T = 4 segundos sobre TIEMPO ACTIVO
+    (nunca sobre el total del journey):
+
+        Satisfecho  : activo ≤ 4 s
+        Tolerante   : 4 s < activo ≤ 16 s     (4 × T)
+        Frustrado   : activo > 16 s
+
+        Apdex = (satisfechos + tolerantes / 2) / n
+
+    Sobre 0,94 es bueno. Bajo 0,85 hay un problema real. Solo se
+    calcula en el informe, no en el heartbeat en vivo.
+
+Veredicto automático del informe (según tasa de éxito)
+
+        ≥ 99%  éxito     Estable
+        ≥ 95% y < 99%    Con observaciones
+        < 95%            Degradado
+
+
+TIEMPOS DE NAVEGACIÓN (Navigation Timing de Chromium)
+-----------------------------------------------------
+
+Se leen al cierre del journey de:
+
+    performance.getEntriesByType('navigation')[0]
+
+Si el flujo visita varias páginas, estos números son de la ÚLTIMA
+navegación (la que sigue viva al terminar). Los Web Vitals, en
+cambio, se acumulan en cada open_url.
+
+TTFB (Time to First Byte, ttfb_ms)
+    nav.responseStart. Desde que el navegador pide la página hasta el
+    primer byte. Incluye DNS + TCP + espera del servidor. Si el TTFB
+    p95 es alto, el backend o la red están lentos: no se arregla
+    comprimiendo imágenes.
+
+DNS (dns_ms)
+    domainLookupEnd − domainLookupStart
+
+TCP (tcp_ms)
+    connectEnd − connectStart  (incluye el handshake TLS cuando aplica)
+
+Espera del servidor (fase del gráfico de carga)
+    max(0, TTFB − DNS − TCP), usando medianas. Si esta fase manda, el
+    problema está en el servidor, no en el frontend.
+
+DOM Interactive (dom_interactive_ms)
+    nav.domInteractive. El HTML ya se parseó lo suficiente para armar
+    el DOM; el usuario todavía no ve la página lista.
+
+DOMContentLoaded (dcl, dom_content_loaded_ms)
+    nav.domContentLoadedEventEnd. HTML parseado y scripts síncronos
+    ejecutados.
+
+Load (load_event_ms)
+    nav.loadEventEnd. Imágenes y recursos bloqueantes terminaron. Si
+    la navegación se corta en DOMContentLoaded, Load a veces no
+    alcanza a registrarse y se descarta (los tramos negativos no
+    entran al gráfico).
+
+Fases de la carga (nav_phases)
+    Parte la navegación en tramos consecutivos con medianas (p50), no
+    promedios, para que un timeout no descuadre la suma. Lo que mide
+    menos del 1% del total se oculta como ruido del navegador.
+
+Tamaño transferido (transfer_size)
+    nav.transferSize del documento HTML de esa navegación, no de toda
+    la página. 0 suele indicar que salió de caché.
+
+
+WEB VITALS (experiencia visual)
+-------------------------------
+
+Se inyecta un PerformanceObserver en cada navegación. Después de cada
+open_url el robot lee window.__argosVitals y acumula.
+
+LCP · Largest Contentful Paint (lcp_ms)
+    Cuándo apareció el elemento visual más grande. Si el flujo visita
+    varias páginas, se queda con el LCP MÁS ALTO del journey.
+
+        p75. Google: bueno ≤ 2,5 s · pobre > 4 s
+
+FCP · First Contentful Paint (fcp_ms)
+    Primer texto o imagen pintado. Se toma el de la PRIMERA página
+    del journey (el primer signo de vida).
+
+        p75. Google: bueno ≤ 1,8 s · pobre > 3 s
+
+CLS · Cumulative Layout Shift (cls)
+    Índice (no es tiempo) de cuánto "saltó" el diseño. Suma de los
+    layout-shift sin hadRecentInput en TODAS las páginas del journey.
+
+        p75. Google: bueno ≤ 0,100 · pobre > 0,250
+
+El informe marca el p75, el mismo percentil que Search Console.
+
+
+THROUGHPUT, CASCADA Y CUELLO DE BOTELLA
+---------------------------------------
+
+Throughput (journeys por minuto)
+    Se agrupan los journeys por hora de TÉRMINO (no de inicio) en
+    ventanas de 1 s a 30 min, buscando ~5 journeys por barra:
+
+        por_minuto = journeys_en_la_ventana × 60 / segundos_de_ventana
+
+    La última ventana se tira si cubrió menos del 60%: si no, el
+    gráfico dibuja una caída de throughput que no ocurrió.
+
+    Qué buscar: mientras subes usuarios, las barras deben subir. Cuando
+    se aplanan y la carga sigue creciendo, el sitio llegó a su techo.
+    Si además despega la tasa de error, ya lo pasaste.
+
+Cascada del journey (waterfall)
+    Gantt del recorrido típico. Cada paso arranca donde terminó el
+    anterior. Usa la mediana (p50) de cada paso, NO el p95: sumar p95
+    inventa un journey que nadie recorrió. Las barras wait son tus
+    pausas; el cuello de botella se pinta en ámbar y nunca es un wait.
+
+Cuello de botella (bottleneck)
+    Entre los pasos que no son wait, gana el de mayor p95 (si no hay
+    p95, el promedio). Un solo timeout no debe secuestrar el promedio;
+    por eso manda el p95.
+
+        share_pct = promedio_del_paso / suma_de_promedios_activos × 100
+
+Tasa de fallo del paso (fail_rate)
+    fails / runs de ese step_index. Recuerda que los pasos posteriores
+    al que falla tienen menos runs porque el journey se cortó.
+
+
+DOM Y EVIDENCIA
+---------------
+
+Peso del DOM (dom_size_bytes)
+    document.documentElement.outerHTML.length al terminar cada paso y
+    al cierre del journey.
+
+Nodos del DOM (dom_node_count)
+    document.querySelectorAll('*').length. Un DOM inflado pone lento
+    al navegador aunque el servidor responda rápido.
+
+Recorrido de referencia (capture_reason = reference)
+    Miniatura de cada paso OK (no wait) de la primera sonda al inicio.
+    Es el "así se ve cuando funciona". Se desactiva con --no-reference.
+
+Paso lento que no falló (capture_reason = slow)
+    El paso terminó OK pero duration_ms ≥ --slow-shot (por omisión
+    8000 ms). Tope: 5 capturas por sonda. No aparece como error en
+    ninguna métrica y para el usuario es igual de malo.
+
+Evidencia de error (capture_reason = error)
+    PNG + HTML en el primer FAIL; el journey se corta. En el informe
+    se agrupan por tipo y se emparejan con la referencia del mismo
+    paso.
+
+Tipos de error (clasificación del mensaje)
+    timeout                         → Timeout
+    net:: / dns / err_connection    → Red / DNS
+    selector / waiting for          → Selector / elemento
+    assert                          → Assert
+    click                           → Click
+    cualquier otra cosa             → Otro
+
+    Timeout y Red/DNS apuntan al sitio bajo prueba. Selector suele ser
+    TU flujo desactualizado porque el sitio cambió el HTML.
+
+
+RECURSOS DEL GENERADOR
+----------------------
+
+Estos números miden TU máquina, no el sitio. Si la CPU del generador
+se va a 90%, el informe pierde valor: parte de la lentitud es tuya.
+
+CPU (cpu_percent)
+    Lee /proc/stat. Entre dos muestras:
+
+        100 × (1 − Δidle / Δtotal)
+
+    La primera muestra sale vacía (aún no hay delta). Mantenerla bajo
+    70-75% es tu coartada frente al cliente.
+
+Memoria (mem_percent, mem_used_mb)
+    (MemTotal − MemAvailable) / MemTotal, desde /proc/meminfo.
+
+Load average (load1, load5)
+    os.getloadavg(). Con 8 vCPU, un load1 de 8 ya es el techo. Por
+    encima, el generador se quedó corto.
+
+Procesos de navegador (browser_processes)
+    Cuántos /proc/<pid>/comm contienen "chrome". Cada sonda abre
+    varios (renderer, GPU, utility).
+
+
+COMPARAR Y CONSOLIDAR
+---------------------
+
+p95 consolidado de 10 generadores
+    No es el promedio de los diez p95. La vista /comparar junta todos
+    los journeys y recalcula los percentiles sobre el conjunto. Esa
+    es la única cifra de capacidad que vale para la prueba completa.
+
+Curva de carga
+    p95 del tiempo activo contra la cantidad de usuarios, con la tasa
+    de error superpuesta. Solo aparece si las corridas comparadas
+    tienen distinto --users.
+
+
+===============================================================================
+Repositorio: https://github.com/kodeskia-byte/ARGOS
+===============================================================================

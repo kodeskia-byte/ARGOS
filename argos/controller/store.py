@@ -275,6 +275,7 @@ class Store:
             item = {
                 "instance_id": row["instance_id"],
                 "run_id": row["run_id"],
+                "started_at": _run_started(row["run_id"], payload.get("started_at")),
                 "last_seen": last_seen,
                 "status": "running" if online else (row["status"] or "offline"),
                 "online": online,
@@ -442,6 +443,53 @@ class Store:
         }
         detail["stats"] = analyze_run(detail)
         return detail
+
+    def compare(self, selections: List[tuple]) -> dict:
+        """Varias corridas lado a lado más el consolidado de todas juntas.
+
+        Resuelve dos necesidades con el mismo mecanismo: comparar escalones de
+        carga entre sí, y sumar los generadores de una prueba distribuida en un
+        único informe (cada generador reporta su propio run_id, así que no hay
+        forma de consolidarlos sin elegirlos a mano).
+        """
+        runs = []
+        probes = []
+        resources = []
+        for instance_id, run_id in selections:
+            detail = self.run_detail(instance_id, run_id)
+            stats = detail.get("stats") or {}
+            if not stats.get("journeys"):
+                continue
+            runs.append({
+                "instance_id": instance_id,
+                "run_id": run_id,
+                "users": detail.get("users") or 0,
+                "flow": detail.get("flow"),
+                "started_at": detail.get("started_at"),
+                "ended_at": detail.get("ended_at"),
+                "stats": stats,
+            })
+            for probe in detail.get("probes") or []:
+                # Dos generadores nombran igual a sus sondas (probe-01), así que
+                # sin prefijo el consolidado las mezclaría en un mismo bucket.
+                probes.append({**probe, "probe_id": f"{instance_id}/{probe['probe_id']}"})
+            resources.extend(detail.get("resources") or [])
+
+        runs.sort(key=lambda run: (run["users"], run["started_at"] or ""))
+        starts = [run["started_at"] for run in runs if run["started_at"]]
+        ends = [run["ended_at"] for run in runs if run["ended_at"]]
+        combined = {
+            "instance_id": ", ".join(sorted({run["instance_id"] for run in runs})) or "—",
+            "run_id": "consolidado",
+            "started_at": min(starts) if starts else None,
+            "ended_at": max(ends) if ends else None,
+            "users": sum(run["users"] for run in runs),
+            "flow": next((run["flow"] for run in runs if run["flow"]), None),
+            "resources": sorted(resources, key=lambda sample: sample.get("ts") or ""),
+            "probes": probes,
+        }
+        combined["stats"] = analyze_run(combined)
+        return {"runs": runs, "combined": combined}
 
     def evidence_file(self, run_id: str, probe_id: str, filename: str) -> Optional[str]:
         run_id = self._safe(run_id)
