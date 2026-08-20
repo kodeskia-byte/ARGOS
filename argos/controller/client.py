@@ -12,8 +12,10 @@ from argos.probe.resources import ResourceSampler
 from argos.reporting.stats import summarize_series
 
 TOKEN_HEADER = "X-Argos-Token"
-HEARTBEAT_INTERVAL = 5.0
-RESULTS_INTERVAL = 1.0
+HEARTBEAT_INTERVAL = 60.0
+RESULTS_INTERVAL = 60.0
+HEARTBEAT_TIMEOUT = 20.0
+RESULTS_TIMEOUT = 60.0
 
 
 class LiveAggregator:
@@ -94,6 +96,21 @@ def _heartbeat_payload(base_payload: dict, aggregator: LiveAggregator, status: s
     return payload
 
 
+def _flush_results(url: str, base_payload: dict, results: List[dict], token: Optional[str]) -> bool:
+    if not url or not results:
+        return True
+    return post_json(
+        url,
+        {
+            **base_payload,
+            "results": results,
+            "files": _collect_files(results),
+        },
+        token=token,
+        timeout=RESULTS_TIMEOUT,
+    )
+
+
 def reporter_loop(queue, aggregator: LiveAggregator, base_payload: dict, controller_url: str,
                   token: Optional[str], stop_event: threading.Event, interval: float = HEARTBEAT_INTERVAL):
     heartbeat_url = controller_url.rstrip("/") + "/ingest/heartbeat" if controller_url else ""
@@ -107,18 +124,9 @@ def reporter_loop(queue, aggregator: LiveAggregator, base_payload: dict, control
         pending.extend(drain_queue(queue, aggregator))
         now = time.time()
         stopping = stop_event.is_set()
-        if results_url and pending and (now - last_results >= RESULTS_INTERVAL or stopping or len(pending) >= 8):
-            post_json(
-                results_url,
-                {
-                    **base_payload,
-                    "results": pending,
-                    "files": _collect_files(pending),
-                },
-                token=token,
-                timeout=30.0,
-            )
-            pending = []
+        if results_url and pending and (now - last_results >= RESULTS_INTERVAL or stopping):
+            if _flush_results(results_url, base_payload, pending, token):
+                pending = []
             last_results = now
         if heartbeat_url and (now - last_send >= interval or stopping):
             status = "finished" if stopping else "running"
@@ -126,32 +134,30 @@ def reporter_loop(queue, aggregator: LiveAggregator, base_payload: dict, control
                 heartbeat_url,
                 _heartbeat_payload(base_payload, aggregator, status, sampler),
                 token=token,
+                timeout=HEARTBEAT_TIMEOUT,
             )
             last_send = now
         if stopping:
             leftover = drain_queue(queue, aggregator)
-            if results_url and leftover:
-                post_json(
-                    results_url,
-                    {**base_payload, "results": leftover, "files": _collect_files(leftover)},
-                    token=token,
-                    timeout=30.0,
-                )
+            pending.extend(leftover)
+            if pending:
+                _flush_results(results_url, base_payload, pending, token)
             if heartbeat_url:
                 post_json(
                     heartbeat_url,
                     _heartbeat_payload(base_payload, aggregator, "finished", sampler),
                     token=token,
+                    timeout=HEARTBEAT_TIMEOUT,
                 )
             break
-        time.sleep(0.2)
+        time.sleep(1.0)
 
 
 def controller_token() -> Optional[str]:
     return os.environ.get("ARGOS_TOKEN") or None
 
 
-def post_json(url: str, payload: dict, token: Optional[str] = None, timeout: float = 3.0) -> bool:
+def post_json(url: str, payload: dict, token: Optional[str] = None, timeout: float = HEARTBEAT_TIMEOUT) -> bool:
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:

@@ -886,8 +886,8 @@ async function loadLive(){
   $("live-sub").textContent = clusters.length
     ? `${clusters.length} carga${clusters.length === 1 ? "" : "s"} en curso · ` +
       `${nf.format(data.online_instances)} generador(es) · ${nf.format(onlineUnits)} sondas · ` +
-      `actualizado ${clock(data.generated_at)}`
-    : `Sin carga en curso · actualizado ${clock(data.generated_at)}`;
+      `métricas cada 1 min · actualizado ${clock(data.generated_at)}`
+    : `Sin carga en curso · métricas cada 1 min · actualizado ${clock(data.generated_at)}`;
   $("live-kpis").innerHTML = clusters.length
     ? kpi("Cargas en curso", nf.format(clusters.length), "pruebas a esta hora", "blue") +
       kpi("Generadores", nf.format(data.online_instances), "máquinas con runner", "blue") +
@@ -1512,7 +1512,7 @@ const GLOSSARY = [
      watch:"Si un generador se pone SIN CONEXIÓN, anótalo: esa máquina se cayó. La carga sigue mostrando a los demás."},
     {term:"Unidades en línea", aka:"online",
      what:"Cuántos robots están reportando ahora, sumados dentro de los generadores en línea.",
-     how:"Un generador está en línea si mandó un heartbeat en los últimos 15 s y su status no es finished. Las unidades en línea = suma de sondas esperadas de esos generadores.",
+     how:"Un generador está en línea si mandó un heartbeat en los últimos 3 min y su status no es finished. Las unidades en línea = suma de sondas esperadas de esos generadores.",
      watch:"Si un generador pasa a SIN CONEXIÓN a mitad de prueba, ese servidor se cayó. Anótalo: sus datos quedan incompletos."},
     {term:"EN LÍNEA / ARMANDO / CON FALLOS / SIN CONEXIÓN", aka:"LED de la unidad",
      what:"Estado de cada robot en la flota.",
@@ -1535,7 +1535,7 @@ const GLOSSARY = [
      how:"ok / journeys."},
     {term:"P95 flujo (en vivo)", aka:"p95_ms del heartbeat",
      what:"El p95 más alto entre los generadores en línea. El subtítulo dice «peor generador».",
-     how:"Cada runner calcula el p95 de total_duration_ms de sus journeys y lo manda cada 5 s. El dashboard toma el máximo, no el promedio.",
+     how:"Cada runner calcula el p95 de total_duration_ms de sus journeys y lo manda cada 1 min. El dashboard toma el máximo, no el promedio.",
      watch:"Incluye think time. No lo compares directo con el P95 activo del informe. Que el p95 se separe del p50 (mediana) significa que unos pocos usuarios la pasan mucho peor que el resto."}
   ]},
   {group:"Estadísticos (mín, promedio, percentiles)", items:[
@@ -1673,9 +1673,9 @@ const GLOSSARY = [
     {term:"Código de unidad", aka:"ZL-G01-P01",
      what:"Identificador corto para reconocer un robot concreto en la sala y en el informe.",
      how:"ZL- + G + dígitos del instance-id + -P + dígitos del probe-id, ambos con 2 cifras."},
-    {term:"Heartbeat", aka:"cada 5 s",
+    {term:"Heartbeat", aka:"cada 1 min",
      what:"El pulso que manda el runner al collector: journeys, ok/fail, p50/p95 y CPU/RAM.",
-     how:"POST /ingest/heartbeat cada 5 segundos. Los journeys detallados viajan aparte cada 1 s a /ingest/results."}
+     how:"POST /ingest/heartbeat cada 1 minuto. Los journeys detallados viajan aparte cada 1 min a /ingest/results. El Live Room también refresca cada 1 min."}
   ]}
 ];
 
@@ -1710,9 +1710,9 @@ function switchView(next){
   document.querySelectorAll("nav button").forEach(b =>
     b.classList.toggle("active", b.dataset.view === next));
   if(timer) clearInterval(timer);
-  if(next === "live"){ loadLive(); timer = setInterval(loadLive, 3000); }
+  if(next === "live"){ loadLive(); timer = setInterval(loadLive, 60000); }
   if(next === "runs"){ loadDates(); }
-  if(next === "detail"){ timer = setInterval(loadDetail, 5000); }
+  if(next === "detail"){ timer = setInterval(loadDetail, 60000); }
   if(next === "glossary"){ renderGlossary($("g-search").value); }
 }
 

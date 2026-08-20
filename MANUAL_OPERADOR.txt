@@ -67,9 +67,9 @@ da los gráficos.
 
 Cómo se hablan:
 
-  El runner envía al collector cada 5 segundos un "heartbeat" (cuántas
+  El runner envía al collector cada 1 minuto un "heartbeat" (cuántas
   iteraciones lleva, cuántas fallaron, p50, p95, y el consumo de CPU/RAM de la
-  máquina) y cada 1 segundo los journeys terminados con sus pantallazos. Al
+  máquina) y cada 1 minuto los journeys terminados con sus pantallazos. Al
   final envía un resumen consolidado. Todo por HTTP POST.
 
 
@@ -734,7 +734,7 @@ ARQUITECTURA
     │ runner │ │ runner │ │ runner │   │ runner │   │
     └───┬────┘ └───┬────┘ └───┬────┘   └───┬────┘   │
         │          │          │            │        │
-        │  heartbeats cada 5s + journeys   │        │
+        │  heartbeats cada 1 min + journeys│        │
         └──────────┴────┬─────┴────────────┘        │
                         │                           │
                  ┌──────▼───────┐                   │
@@ -1282,13 +1282,13 @@ Tasa de error (error_rate) y tasa de éxito (success_rate)
 
 P95 flujo (en vivo)
     Cada runner calcula el p95 de total_duration_ms de SUS journeys y
-    lo manda cada 5 s. El dashboard toma el MÁXIMO entre generadores
+    lo manda cada 1 min. El dashboard toma el MÁXIMO entre generadores
     en línea ("peor generador"), no el promedio ni un p95 agrupado.
     Incluye think time.
 
 Heartbeat
-    POST /ingest/heartbeat cada 5 segundos: journeys, ok/fail, p50,
-    p95, CPU y RAM. Los journeys detallados van aparte cada 1 s a
+    POST /ingest/heartbeat cada 1 minuto: journeys, ok/fail, p50,
+    p95, CPU y RAM. Los journeys detallados van aparte cada 1 min a
     /ingest/results.
 
 

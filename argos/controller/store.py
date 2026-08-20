@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone
 from typing import List, Optional
 
-LIVE_SECONDS = 15
+LIVE_SECONDS = 180
 DEFAULT_DB = os.environ.get("ARGOS_DB", "data/argos.db")
 
 from argos.controller.analytics import analyze_run

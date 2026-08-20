@@ -163,7 +163,7 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
                     total_results.extend(r)
     finally:
         stop_event.set()
-        reporter.join(timeout=30)
+        reporter.join(timeout=120)
 
     total_duration = time.time() - start_time
 
