@@ -47,7 +47,7 @@
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:14px;margin-bottom:20px}
   .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
   .kpi .label{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
-  .kpi .value{font-size:26px;font-weight:700;margin-top:4px}
+  .kpi .value{font-size:26px;font-weight:700;margin-top:4px;line-height:1.15}
   .kpi .value.ok{color:var(--ok)} .kpi .value.bad{color:var(--bad)} .kpi .value.blue{color:var(--blue)}
   .kpi .sub{font-size:12px;color:var(--muted)}
   .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
@@ -353,6 +353,20 @@ function stamp(iso){
   if(!iso) return "—";
   const d = new Date(iso);
   return isNaN(d) ? iso : d.toLocaleString("es-CL", {hour12:false});
+}
+function partsWhen(iso){
+  if(!iso) return null;
+  const d = new Date(iso);
+  if(isNaN(d)) return {day: iso, clock: ""};
+  return {
+    day: d.toLocaleDateString("es-CL"),
+    clock: d.toLocaleTimeString("es-CL", {hour12:false, hour:"2-digit", minute:"2-digit", second:"2-digit"}),
+  };
+}
+function kpiWhen(label, iso, empty){
+  const p = partsWhen(iso);
+  if(!p) return kpi(label, empty || "—", null, "blue");
+  return kpi(label, p.day, p.clock, "blue");
 }
 function esc(s){
   return String(s ?? "").replace(/[&<>"']/g, c =>
@@ -1431,8 +1445,12 @@ async function loadDetail(){
     `Inicio ${stamp(s.started_at)} · ${s.ended_at ? "fin " + stamp(s.ended_at) : "en curso"} · ` +
     `flujo ${s.flow || "—"} · ${nf.format(s.sondas || 0)} sondas`;
 
+  const whenKpis =
+    kpiWhen("Fecha inicio", s.started_at) +
+    kpiWhen("Fecha fin", s.ended_at, "en curso");
+
   if(!s.journeys){
-    $("detail-kpis").innerHTML = "";
+    $("detail-kpis").innerHTML = whenKpis + kpi("Peso DOM", "—");
     $("detail-neck").innerHTML = "";
     $("detail-charts").innerHTML = `<div class="card empty">Aún no llegan journeys de esta corrida.</div>`;
     $("detail-metrics").innerHTML = "";
@@ -1457,7 +1475,8 @@ async function loadDetail(){
         s.cls ? `CLS ${Number(P(s.cls,"p75") || s.cls.avg).toFixed(3)}` : `prom ${ms(s.lcp_ms && s.lcp_ms.avg)}`) +
     kpi("TTFB p95", ms(P(s.ttfb_ms,"p95")), `prom ${ms(s.ttfb_ms && s.ttfb_ms.avg)}`) +
     kpi("Peso DOM", bytes(s.dom_size_bytes && s.dom_size_bytes.avg),
-        s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null);
+        s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null) +
+    whenKpis;
 
   renderNeck(s);
   renderCharts(s);

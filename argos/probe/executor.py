@@ -39,13 +39,16 @@ MAX_SLOW_SHOTS = 5
 
 class FlowExecutor:
     def __init__(self, probe_id: str, output_dir: str, reference: bool = False,
-                 slow_step_ms: float = 0):
+                 slow_step_ms: float = 0, lite: bool = False):
         self.probe_id = probe_id
         self.output_dir = output_dir
         self.browser_manager = BrowserManager.instance()
         self.slow_step_ms = slow_step_ms
+        self.lite = lite
         self._reference_pending = reference
         self._slow_shots = 0
+        self._context = None
+        self._page = None
 
         # Ensure output dir exists
         os.makedirs(self.output_dir, exist_ok=True)
@@ -65,10 +68,8 @@ class FlowExecutor:
         return screenshot_file, dom_file
 
     def execute(self, flow: Flow, headless: bool = True) -> FlowResult:
-        self.browser_manager.start(headless=headless)
-        context = self.browser_manager.new_context()
-        context.add_init_script(VITALS_SCRIPT)
-        page = context.new_page()
+        self.browser_manager.start(headless=headless, lite=self.lite)
+        context, page = self._session()
 
         step_results = []
         flow_start_time = datetime.now()
@@ -145,7 +146,10 @@ class FlowExecutor:
             # El recorrido de referencia se arma una sola vez por corrida: repetirlo
             # en cada iteración multiplicaría las imágenes sin agregar información.
             self._reference_pending = False
-            context.close()
+            if not self.lite:
+                context.close()
+                self._context = None
+                self._page = None
 
         flow_end_time = datetime.now()
         total_duration = (flow_end_time - flow_start_time).total_seconds() * 1000
@@ -167,6 +171,29 @@ class FlowExecutor:
                 cls=round(vitals["cls"], 4) if vitals["cls"] else None,
             ) if vitals["lcp_ms"] or vitals["fcp_ms"] or vitals["cls"] else None,
         )
+
+    def _session(self):
+        """En --lite reutiliza el mismo Chromium entre journeys.
+
+        Abrir y cerrar un context por iteración cuesta más que el propio
+        flujo cuando la sonda es liviana. Entre journeys se limpian cookies
+        para no arrastrar sesión.
+        """
+        if self.lite and self._context is not None and self._page is not None:
+            try:
+                self._context.clear_cookies()
+            except Exception:
+                pass
+            return self._context, self._page
+
+        context = self.browser_manager.new_context(lite=self.lite)
+        self.browser_manager.prepare_context(context, lite=self.lite)
+        context.add_init_script(VITALS_SCRIPT)
+        page = context.new_page()
+        if self.lite:
+            self._context = context
+            self._page = page
+        return context, page
 
     def _merge_vitals(self, page, vitals: dict) -> None:
         """Acumula LCP/FCP/CLS de la navegación actual.

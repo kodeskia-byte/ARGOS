@@ -41,11 +41,12 @@ def _init_worker(queue):
 
 def run_worker(args):
     """Worker process function."""
-    probe_id, flow_data, duration_sec, output_dir, headless, reference, slow_step_ms = args
+    probe_id, flow_data, duration_sec, output_dir, headless, reference, slow_step_ms, lite = args
 
     flow = Flow(**flow_data)
     executor = FlowExecutor(probe_id=probe_id, output_dir=output_dir,
-                            reference=reference, slow_step_ms=slow_step_ms)
+                            reference=reference, slow_step_ms=slow_step_ms,
+                            lite=lite)
 
     results = []
     end_time = datetime.now() + timedelta(seconds=duration_sec)
@@ -82,8 +83,10 @@ def run_worker(args):
               help='Capturar pantalla de pasos correctos que superen estos ms (0 = desactivado)')
 @click.option('--no-reference', is_flag=True,
               help='No capturar el recorrido de referencia del flujo correcto')
+@click.option('--lite', is_flag=True,
+              help='Chromium liviano: sin imágenes, video, fuentes ni animaciones')
 def main(users, duration, flow, output, headed, controller_url, instance_id,
-         slow_shot, no_reference):
+         slow_shot, no_reference, lite):
     """ARGOS .IA Stress Test Runner"""
     instance_id = instance_id or socket.gethostname()
     print(f"=== ARGOS .IA Stress Test ===")
@@ -92,6 +95,7 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     print(f"Flow: {flow}")
     print(f"Output: {output}")
     print(f"Headless: {not headed}")
+    print(f"Browser: {'lite (mínimo recurso)' if lite else 'full (usuario real)'}")
     print(f"Instance: {instance_id}")
     if slow_shot:
         print(f"Slow shot: pasos correctos sobre {slow_shot:.0f} ms")
@@ -129,7 +133,7 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
         # Solo la primera sonda arma el recorrido de referencia: con 100 usuarios
         # serían 100 copias idénticas del mismo flujo correcto.
         worker_args.append((probe_id, flow_data, duration_sec, run_output_dir, not headed,
-                            i == 0 and not no_reference, slow_shot))
+                            i == 0 and not no_reference, slow_shot, lite))
 
     result_queue = multiprocessing.Queue()
     aggregator = LiveAggregator()

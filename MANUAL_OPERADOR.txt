@@ -261,6 +261,11 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
                              (apagado). Ej: --slow-shot 5000
     --no-reference           No captura el recorrido de referencia del flujo
                              correcto. Por omisión sí se captura.
+    --lite                   Chromium liviano: sin GPU, sin imágenes, video
+                             ni fuentes, y sin animaciones CSS. Cabe más
+                             sonda por máquina. LCP/CLS y peso de página ya
+                             no representan a un usuario real; úsalo para
+                             rampa de capacidad, no para el informe al cliente.
 
 Sobre --slow-shot: un paso lento que no falla no aparece como error en ninguna
 métrica, pero para el usuario es igual de malo. Esta opción deja la evidencia
