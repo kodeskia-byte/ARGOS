@@ -46,10 +46,10 @@ ante un cliente, y por eso consume bastante CPU (ver sección 11).
 Son dos programas independientes:
 
   RUNNER (runner.py)
-      Es el generador de carga. Lanza N sondas en paralelo, cada una en su
-      propio proceso, cada una con su navegador. Repite el flujo una y otra vez
-      durante el tiempo que le pidas. Guarda todo en disco y, si le das la URL
-      de un collector, va reportando en vivo.
+      Es el generador de carga. Lanza N sondas en paralelo sobre uno o pocos
+      Chromium compartidos (un context por sonda, no un navegador por sonda).
+      Repite el flujo una y otra vez durante el tiempo que le pidas. Guarda
+      todo en disco y, si le das la URL de un collector, va reportando en vivo.
 
   COLLECTOR (argos.controller.server)
       Es el servidor de monitoreo: recibe los datos de todos los generadores,
@@ -247,6 +247,12 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
 
     --flow RUTA              OBLIGATORIO. Ruta al YAML del flujo.
     --users N                Cantidad de sondas en paralelo. Default 1.
+                             Con 40 o más, ARGOS activa --lite solo, salvo
+                             que pases --full.
+    --browsers N             Procesos Chromium compartidos. Default: automático
+                             (~25 sondas lite o ~12 full por proceso).
+    --full                   Fuerza Chromium completo (usuario real) aunque
+                             haya muchas sondas. Más CPU y RAM.
     --duration TIEMPO        Cuánto dura. Formato: 30s, 5m, 1h. Default 10s.
     --output DIR             Dónde guardar. Default: results
     --headed                 Muestra la ventana del navegador. Solo para
@@ -266,6 +272,11 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
                              sonda por máquina. LCP/CLS y peso de página ya
                              no representan a un usuario real; úsalo para
                              rampa de capacidad, no para el informe al cliente.
+                             Se activa solo con --users 40 o más, salvo --full.
+
+Sobre --browsers: ARGOS ya no abre un Chromium por sonda. Con --users 100
+y --lite usa 4 procesos (~25 contexts cada uno). Sube --browsers si ves
+crashes de renderer; bájalo a 1 si quieres el mínimo absoluto de RAM.
 
 Sobre --slow-shot: un paso lento que no falla no aparece como error en ninguna
 métrica, pero para el usuario es igual de malo. Esta opción deja la evidencia
@@ -911,22 +922,32 @@ No hay un número universal. Depende del sitio que pruebes, y bastante.
 
 POR MEMORIA
 
-Cada sonda mantiene un contexto de Chromium vivo: alrededor de 167 MB. El
-script de setup te calcula el techo automáticamente y lo imprime al final:
+Las sondas ya no abren un Chromium cada una. Comparten uno o pocos procesos
+y cada sonda es un context: alrededor de 40 MB en --lite (más ~200 MB del
+navegador). El script de setup te calcula el techo y lo imprime al final:
 
-    sondas recomendadas por RAM disponible: ~71
+    sondas recomendadas por RAM (--lite, browser compartido): ~290
 
-Ese cálculo deja un 25% de RAM libre para el sistema.
+Ese cálculo deja un 25% de RAM libre para el sistema. En un servidor de
+16 GB, 100 usuarios en --lite caben por memoria; el límite sigue siendo
+la CPU.
+
+Para 100 usuarios en UN servidor:
+
+    ./venv/bin/python runner.py --users 100 --duration 10m --lite \
+        --flow flows/example.yaml --controller-url http://IP:8080 \
+        --instance-id gen-01
 
 POR CPU (que es el límite real)
 
 La CPU se acaba mucho antes que la memoria. Y aquí hay algo que sorprende:
 
 Uno esperaría que durante el think time la sonda no consuma CPU, porque está
-"esperando". No es así. Chromium sigue renderizando la página: animaciones,
-carruseles, videos en loop, efectos al hacer scroll. En sitios con mucha
-animación, una sonda en think time puede seguir gastando CPU casi como si
-estuviera navegando.
+"esperando". No es así en modo full. Chromium sigue renderizando la página:
+animaciones, carruseles, videos en loop, efectos al hacer scroll. En sitios
+con mucha animación, una sonda en think time puede seguir gastando CPU casi
+como si estuviera navegando. --lite corta imágenes, video, fuentes y
+animaciones CSS: es lo que hace viable 100 sondas en un servidor.
 
 Consecuencia práctica: NO puedes estimar la capacidad en un escritorio y
 extrapolarla. Tienes que medirla con TU flujo contra TU sitio.
@@ -1214,8 +1235,9 @@ CÓMO MIDE EL ROBOT
 ------------------
 
 Sonda / unidad Z-Load (probe_id, código ZL-G01-P01)
-    Un navegador Chromium real que recorre el YAML una y otra vez. No es
-    una petición HTTP suelta: ejecuta JavaScript, baja imágenes y anima.
+    Un context de Chromium que recorre el YAML una y otra vez. No es una
+    petición HTTP suelta: ejecuta JavaScript y, salvo --lite, baja imágenes
+    y anima. Varias sondas comparten el mismo proceso Chromium.
     El código de reconocimiento es ZL-G{n}-P{m}: n sale de los dígitos de
     --instance-id (gen-01 → G01) y m de probe-id (probe-03 → P03).
 

@@ -1,6 +1,7 @@
-from typing import Optional
+import os
+from typing import List, Optional
 
-from playwright.sync_api import Browser, BrowserContext, Playwright, sync_playwright
+from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
 # Flags que no cambian LCP/CLS ni el peso de la página: apagan GPU, audio,
 # crash reporter y servicios de Chrome que no aportan a una sonda headless.
@@ -25,11 +26,22 @@ LEAN_ARGS = [
     "--use-mock-keychain",
 ]
 
-# Extra del modo --lite: menos procesos renderer y heap JS acotado.
-# Las imágenes/fuentes/video se cortan aparte, con page.route.
+# Varias sondas en el mismo Chromium: sin esto, site isolation abre un
+# renderer por pestaña y volvemos al costo de un navegador por usuario.
+DENSITY_ARGS = [
+    "--disable-site-isolation-trials",
+    "--disable-features=IsolateOrigins,site-per-process,Translate,BackForwardCache,"
+    "AcceptCHFrame,MediaRouter,OptimizationHints,InterestFeedContentSuggestions",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-ipc-flooding-protection",
+    "--disable-component-extensions-with-background-pages",
+]
+
+# Extra del modo --lite: heap JS acotado. Las imágenes/fuentes/video se
+# cortan aparte, con page.route. El tope de renderers lo calcula el pool.
 LITE_ARGS = [
     "--js-flags=--max-old-space-size=128",
-    "--renderer-process-limit=2",
     "--disable-webgl",
     "--autoplay-policy=user-gesture-required",
 ]
@@ -44,87 +56,109 @@ LITE_CSS = """
 }
 """
 
+# Cuántos contexts metemos en cada proceso Chromium. Por encima de esto
+# el protocolo CDP se pone inestable y un crash tumba demasiadas sondas.
+CONTEXTS_PER_BROWSER_LITE = 25
+CONTEXTS_PER_BROWSER_FULL = 12
 
-class BrowserManager:
-    _instance = None
-    _playwright: Optional[Playwright] = None
-    _browser: Optional[Browser] = None
-    _headless: Optional[bool] = None
-    _lite: bool = False
+
+def default_browsers(users: int, lite: bool) -> int:
+    """Mínimo de procesos Chromium para N sondas concurrentes."""
+    per = CONTEXTS_PER_BROWSER_LITE if lite else CONTEXTS_PER_BROWSER_FULL
+    return max(1, min(users, (users + per - 1) // per))
+
+
+def renderer_limit(pages_per_browser: int, browser_count: int) -> int:
+    """Renderers por Chromium: comparte procesos, no uno por pestaña."""
+    cpus = os.cpu_count() or 4
+    share = max(2, cpus // max(browser_count, 1))
+    return max(2, min(pages_per_browser, share, 8))
+
+
+def launch_args(lite: bool, renderer_cap: int) -> List[str]:
+    args = list(LEAN_ARGS)
+    args.extend(DENSITY_ARGS)
+    args.append(f"--renderer-process-limit={renderer_cap}")
+    if lite:
+        args.extend(LITE_ARGS)
+    return args
+
+
+class BrowserPool:
+    """Uno o pocos Chromium, muchos contexts. Ahí está el ahorro de RAM.
+
+    Playwright no es thread-safe: todo corre en un solo loop asyncio.
+    """
 
     def __init__(self):
-        pass
+        self._playwright: Optional[Playwright] = None
+        self._browsers: List[Browser] = []
+        self.lite: bool = False
+        self.renderer_cap: int = 2
 
-    @classmethod
-    def instance(cls):
-        if cls._instance is None:
-            cls._instance = cls.__new__(cls)
-            cls._instance._playwright = None
-            cls._instance._browser = None
-            cls._instance._headless = None
-            cls._instance._lite = False
-        return cls._instance
+    @property
+    def browser_count(self) -> int:
+        return len(self._browsers)
 
-    def start(self, headless: bool = True, lite: bool = False):
-        """Starts Playwright and the Browser if not already started."""
+    async def start(self, count: int, headless: bool = True, lite: bool = False,
+                    pages_per_browser: int = 1):
         if self._playwright is None:
-            self._playwright = sync_playwright().start()
+            self._playwright = await async_playwright().start()
+        self.lite = lite
+        self.renderer_cap = renderer_limit(max(pages_per_browser, 1), max(count, 1))
+        args = launch_args(lite, self.renderer_cap)
+        try:
+            for _ in range(max(count, 1)):
+                browser = await self._playwright.chromium.launch(
+                    headless=headless,
+                    args=args,
+                )
+                self._browsers.append(browser)
+        except Exception:
+            await self.close()
+            raise
 
-        args = list(LEAN_ARGS)
-        if lite:
-            args.extend(LITE_ARGS)
+    def browser_for(self, index: int) -> Browser:
+        if not self._browsers:
+            raise RuntimeError("BrowserPool.start() was not called")
+        return self._browsers[index % len(self._browsers)]
 
-        need_relaunch = (
-            self._browser is None
-            or getattr(self, "_headless", headless) != headless
-            or getattr(self, "_lite", False) != lite
-        )
-        if need_relaunch:
-            if self._browser is not None:
-                self._browser.close()
-            self._browser = self._playwright.chromium.launch(
-                headless=headless,
-                args=args,
-            )
-            self._headless = headless
-            self._lite = lite
-
-    def new_context(self, lite: bool = False) -> BrowserContext:
-        """Creates a new isolated browser context."""
-        if self._browser is None:
-            self.start(lite=lite)
+    async def new_context(self, browser: Browser) -> BrowserContext:
         kwargs = {}
-        if lite:
+        if self.lite:
             kwargs["reduced_motion"] = "reduce"
             kwargs["viewport"] = {"width": 1280, "height": 720}
-        return self._browser.new_context(**kwargs)
+        context = await browser.new_context(**kwargs)
+        await self.prepare_context(context)
+        return context
 
-    def prepare_context(self, context: BrowserContext, lite: bool = False):
+    async def prepare_context(self, context: BrowserContext):
         """Corta imágenes, fuentes, video y animaciones CSS. Solo modo --lite."""
-        if not lite:
+        if not self.lite:
             return
 
-        def _lite_route(route):
+        async def _lite_route(route):
             if route.request.resource_type in LITE_BLOCK:
-                route.abort()
+                await route.abort()
             else:
-                route.continue_()
+                await route.continue_()
 
-        context.route("**/*", _lite_route)
+        await context.route("**/*", _lite_route)
         css = LITE_CSS.replace("\n", " ")
-        context.add_init_script(
+        await context.add_init_script(
             "(() => { const s = document.createElement('style');"
             f"s.textContent = {css!r};"
             "(document.head || document.documentElement).appendChild(s); })();"
         )
 
-    def close(self):
-        """Clean shutdown."""
-        if self._browser:
-            self._browser.close()
-            self._browser = None
+    async def close(self):
+        for browser in self._browsers:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+        self._browsers = []
         if self._playwright:
-            self._playwright.stop()
+            await self._playwright.stop()
             self._playwright = None
-        self._headless = None
-        self._lite = False
+        self.lite = False

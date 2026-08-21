@@ -51,8 +51,11 @@ print("fuente PDF:", "ok" if os.path.isfile(font) else "FALTA -> el PDF perderá
 from argos.probe.resources import ResourceSampler
 sample = ResourceSampler().sample()
 print(f"recursos: {sample['cpu_count']} vCPU, {sample['mem_total_mb']:.0f} MB RAM")
-capacity = int(sample["mem_total_mb"] * 0.75 / 167)
-print(f"sondas recomendadas por RAM disponible: ~{capacity}")
+# Browser compartido: ~200 MB el Chromium + ~40 MB por context en --lite.
+overhead, per_probe = 200, 40
+capacity = max(1, int((sample["mem_total_mb"] * 0.75 - overhead) / per_probe))
+print(f"sondas recomendadas por RAM (--lite, browser compartido): ~{capacity}")
+print("el techo real lo pone la CPU: mide con 10 sondas x 3 min y escala")
 PY
 
 if [[ "$WITH_COLLECTOR" == "1" ]]; then
@@ -84,5 +87,9 @@ fi
 echo
 echo "Listo. Para ejecutar una carga:"
 echo "  $VENV_DIR/bin/python runner.py --users 10 --duration 5m \\"
+echo "      --flow flows/example.yaml \\"
+echo "      --controller-url http://IP_DEL_COLLECTOR:8080 --instance-id gen-01"
+echo "Para 100 usuarios en un servidor:"
+echo "  $VENV_DIR/bin/python runner.py --users 100 --duration 10m --lite \\"
 echo "      --flow flows/example.yaml \\"
 echo "      --controller-url http://IP_DEL_COLLECTOR:8080 --instance-id gen-01"

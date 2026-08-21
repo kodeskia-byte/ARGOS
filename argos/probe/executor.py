@@ -1,14 +1,18 @@
+import asyncio
 import random
 import time
 import os
 import traceback
 from datetime import datetime
 from typing import Optional
+
+from playwright.async_api import BrowserContext, Page
+
 from argos.models.flow import Flow, Step, ActionType
 from argos.models.result import DomMetrics, FlowResult, NavTimings, StepResult, WebVitals
-from argos.probe.browser import BrowserManager
+from argos.probe.browser import BrowserPool
 
-# Se inyecta en cada navegación para que LCP/FCP/CLS sobrevivan al cambio de
+# Se inyecta en cada navegación para que LCP/CLS sobrevivan al cambio de
 # página. Sin este script, performance.getEntries() a fin del journey solo
 # vería la última URL y perderíamos la métrica de la home, que es la que más
 # importa al cliente.
@@ -36,46 +40,53 @@ try {
 # sitio bajo prueba.
 MAX_SLOW_SHOTS = 5
 
+# Reciclar el context cada N journeys evita que el heap JS crezca sin techo
+# en corridas largas, sin pagar el costo de abrirlo en cada iteración.
+CONTEXT_RECYCLE_EVERY = 20
+
 
 class FlowExecutor:
-    def __init__(self, probe_id: str, output_dir: str, reference: bool = False,
+    def __init__(self, probe_id: str, output_dir: str, pool: BrowserPool,
+                 probe_index: int = 0, reference: bool = False,
                  slow_step_ms: float = 0, lite: bool = False):
         self.probe_id = probe_id
         self.output_dir = output_dir
-        self.browser_manager = BrowserManager.instance()
+        self.pool = pool
+        self.probe_index = probe_index
         self.slow_step_ms = slow_step_ms
         self.lite = lite
         self._reference_pending = reference
         self._slow_shots = 0
-        self._context = None
-        self._page = None
+        self._context: Optional[BrowserContext] = None
+        self._page: Optional[Page] = None
+        self._journeys = 0
 
-        # Ensure output dir exists
         os.makedirs(self.output_dir, exist_ok=True)
 
-    def _capture(self, page, kind: str, index: int, with_dom: bool = False) -> tuple:
+    async def _capture(self, page, kind: str, index: int, with_dom: bool = False) -> tuple:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         base = os.path.join(self.output_dir, f"{kind}_{self.probe_id}_step_{index}_{stamp}")
         screenshot_file, dom_file = base + ".png", (base + ".html") if with_dom else None
         try:
-            page.screenshot(path=screenshot_file)
+            await page.screenshot(path=screenshot_file)
             if dom_file:
+                html = await page.content()
                 with open(dom_file, "w", encoding="utf-8") as handle:
-                    handle.write(page.content())
+                    handle.write(html)
         except Exception as capture_err:
             print(f"Failed to capture evidence: {capture_err}")
             return None, None
         return screenshot_file, dom_file
 
-    def execute(self, flow: Flow, headless: bool = True) -> FlowResult:
-        self.browser_manager.start(headless=headless, lite=self.lite)
-        context, page = self._session()
+    async def execute(self, flow: Flow) -> FlowResult:
+        _, page = await self._session()
 
         step_results = []
         flow_start_time = datetime.now()
         success = True
         error_msg = None
         vitals = {"lcp_ms": None, "fcp_ms": None, "cls": 0.0}
+        crashed = False
 
         try:
             for i, step in enumerate(flow.steps):
@@ -87,17 +98,18 @@ class FlowExecutor:
                 reason = None
 
                 try:
-                    self._execute_step(page, step)
+                    await self._execute_step(page, step)
                     if step.action == ActionType.OPEN_URL:
-                        self._merge_vitals(page, vitals)
+                        await self._merge_vitals(page, vitals)
                 except Exception as e:
                     step_status = "FAIL"
                     success = False
                     step_error = str(e)
                     error_msg = f"Step {i} ({step.action}) failed: {step_error}"
                     reason = "error"
-                    screenshot_file, dom_file = self._capture(page, "error", i, with_dom=True)
-                    # Break loop on failure
+                    crashed = _is_target_closed(e)
+                    if not crashed:
+                        screenshot_file, dom_file = await self._capture(page, "error", i, with_dom=True)
 
                 step_end = time.time()
                 duration = (step_end - step_start) * 1000
@@ -108,14 +120,14 @@ class FlowExecutor:
                     # error no dice qué debería haber aparecido en pantalla.
                     if self._reference_pending:
                         reason = "reference"
-                        screenshot_file, _ = self._capture(page, "reference", i)
+                        screenshot_file, _ = await self._capture(page, "reference", i)
                     elif (self.slow_step_ms and duration >= self.slow_step_ms
                           and self._slow_shots < MAX_SLOW_SHOTS):
                         # Un paso de 15 s que no falla es tan interesante como uno
                         # que sí, y hasta ahora no dejaba ninguna evidencia visual.
                         reason = "slow"
                         self._slow_shots += 1
-                        screenshot_file, _ = self._capture(page, "slow", i)
+                        screenshot_file, _ = await self._capture(page, "slow", i)
 
                 result = StepResult(
                     step_index=i,
@@ -128,7 +140,7 @@ class FlowExecutor:
                     capture_reason=reason if screenshot_file else None,
                     screenshot_path=screenshot_file,
                     dom_snapshot_path=dom_file,
-                    dom=self._capture_dom_metrics(page),
+                    dom=None if crashed else await self._capture_dom_metrics(page),
                 )
                 step_results.append(result)
 
@@ -138,18 +150,19 @@ class FlowExecutor:
         except Exception as e:
             success = False
             error_msg = f"Global execution error: {str(e)}"
+            crashed = crashed or _is_target_closed(e)
             traceback.print_exc()
         finally:
-            nav_timings = self._capture_nav_timings(page)
-            final_dom = self._capture_dom_metrics(page)
-            self._merge_vitals(page, vitals)
+            nav_timings = None if crashed else await self._capture_nav_timings(page)
+            final_dom = None if crashed else await self._capture_dom_metrics(page)
+            if not crashed:
+                await self._merge_vitals(page, vitals)
             # El recorrido de referencia se arma una sola vez por corrida: repetirlo
             # en cada iteración multiplicaría las imágenes sin agregar información.
             self._reference_pending = False
-            if not self.lite:
-                context.close()
-                self._context = None
-                self._page = None
+            self._journeys += 1
+            if crashed or self._journeys % CONTEXT_RECYCLE_EVERY == 0:
+                await self.close()
 
         flow_end_time = datetime.now()
         total_duration = (flow_end_time - flow_start_time).total_seconds() * 1000
@@ -172,37 +185,48 @@ class FlowExecutor:
             ) if vitals["lcp_ms"] or vitals["fcp_ms"] or vitals["cls"] else None,
         )
 
-    def _session(self):
-        """En --lite reutiliza el mismo Chromium entre journeys.
+    async def _session(self):
+        """Reutiliza el context entre journeys.
 
         Abrir y cerrar un context por iteración cuesta más que el propio
-        flujo cuando la sonda es liviana. Entre journeys se limpian cookies
-        para no arrastrar sesión.
+        flujo cuando hay muchas sondas en el mismo Chromium. Entre journeys
+        se limpian cookies para no arrastrar sesión.
         """
-        if self.lite and self._context is not None and self._page is not None:
+        if self._context is not None and self._page is not None:
             try:
-                self._context.clear_cookies()
+                await self._context.clear_cookies()
+                await self._page.evaluate(
+                    "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"
+                )
+                return self._context, self._page
             except Exception:
-                pass
-            return self._context, self._page
+                await self.close()
 
-        context = self.browser_manager.new_context(lite=self.lite)
-        self.browser_manager.prepare_context(context, lite=self.lite)
-        context.add_init_script(VITALS_SCRIPT)
-        page = context.new_page()
-        if self.lite:
-            self._context = context
-            self._page = page
+        browser = self.pool.browser_for(self.probe_index)
+        context = await self.pool.new_context(browser)
+        await context.add_init_script(VITALS_SCRIPT)
+        page = await context.new_page()
+        self._context = context
+        self._page = page
         return context, page
 
-    def _merge_vitals(self, page, vitals: dict) -> None:
+    async def close(self):
+        context, self._context, self._page = self._context, None, None
+        if context is None:
+            return
+        try:
+            await context.close()
+        except Exception:
+            pass
+
+    async def _merge_vitals(self, page, vitals: dict) -> None:
         """Acumula LCP/FCP/CLS de la navegación actual.
 
         El script se reinstala en cada page.goto, así que hay que leerlo
         inmediatamente después de abrir una URL: si se espera al final del
         journey, solo queda el de la última página.
         """
-        sample = self._read_vitals(page)
+        sample = await self._read_vitals(page)
         if not sample:
             return
         if sample.get("lcp") is not None:
@@ -214,15 +238,15 @@ class FlowExecutor:
             vitals["cls"] = (vitals["cls"] or 0) + sample["cls"]
 
     @staticmethod
-    def _read_vitals(page) -> Optional[dict]:
+    async def _read_vitals(page) -> Optional[dict]:
         try:
-            return page.evaluate("() => window.__argosVitals || null")
+            return await page.evaluate("() => window.__argosVitals || null")
         except Exception:
             return None
 
-    def _capture_dom_metrics(self, page) -> Optional[DomMetrics]:
+    async def _capture_dom_metrics(self, page) -> Optional[DomMetrics]:
         try:
-            data = page.evaluate("""() => {
+            data = await page.evaluate("""() => {
                 const html = document.documentElement ? document.documentElement.outerHTML : '';
                 return {
                     size_bytes: html.length,
@@ -233,9 +257,9 @@ class FlowExecutor:
         except Exception:
             return None
 
-    def _capture_nav_timings(self, page) -> Optional[NavTimings]:
+    async def _capture_nav_timings(self, page) -> Optional[NavTimings]:
         try:
-            data = page.evaluate("""() => {
+            data = await page.evaluate("""() => {
                 const nav = performance.getEntriesByType('navigation')[0];
                 if (!nav) return null;
                 return {
@@ -262,25 +286,25 @@ class FlowExecutor:
             return step.selector
         raise ValueError(f"{step.action.value} action requires xpath or selector")
 
-    def _execute_step(self, page, step: Step):
+    async def _execute_step(self, page, step: Step):
         if step.action == ActionType.OPEN_URL:
-            page.goto(step.value, timeout=step.timeout, wait_until="domcontentloaded")
+            await page.goto(step.value, timeout=step.timeout, wait_until="domcontentloaded")
 
         elif step.action == ActionType.CLICK:
-            page.click(self._playwright_selector(step), timeout=step.timeout)
+            await page.click(self._playwright_selector(step), timeout=step.timeout)
 
         elif step.action == ActionType.INPUT:
-            page.fill(self._playwright_selector(step), step.value or "", timeout=step.timeout)
+            await page.fill(self._playwright_selector(step), step.value or "", timeout=step.timeout)
 
         elif step.action == ActionType.ASSERT:
-            page.wait_for_selector(
+            await page.wait_for_selector(
                 self._playwright_selector(step),
                 state="visible",
                 timeout=step.timeout,
             )
 
         elif step.action == ActionType.WAIT:
-            time.sleep(self._think_time(step))
+            await asyncio.sleep(self._think_time(step))
 
     @staticmethod
     def _think_time(step: Step) -> float:
@@ -295,3 +319,8 @@ class FlowExecutor:
             low, high = (float(part) for part in raw.split("-", 1))
             return random.uniform(min(low, high), max(low, high)) / 1000.0
         return float(raw) / 1000.0
+
+
+def _is_target_closed(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "target closed" in text or "has been closed" in text or "crashed" in text

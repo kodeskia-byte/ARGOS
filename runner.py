@@ -1,14 +1,18 @@
+import asyncio
 import click
 import yaml
 import json
 import time
 import os
 import socket
-import multiprocessing
 import threading
+import traceback
 import re
 from datetime import datetime, timedelta, timezone
+from queue import Queue
+
 from argos.models.flow import Flow
+from argos.probe.browser import BrowserPool, default_browsers
 from argos.probe.executor import FlowExecutor
 from argos.reporting import build_summary, format_summary, save_summary
 from argos.controller.client import (
@@ -18,7 +22,9 @@ from argos.controller.client import (
     reporter_loop,
 )
 
-RESULT_QUEUE = None
+# Con muchas sondas el modo completo no cabe en un servidor típico: Chromium
+# sigue pintando animaciones durante el think time. --full lo fuerza igual.
+AUTO_LITE_USERS = 40
 
 
 def parse_duration(duration_str: str) -> int:
@@ -34,19 +40,25 @@ def parse_duration(duration_str: str) -> int:
     return value
 
 
-def _init_worker(queue):
-    global RESULT_QUEUE
-    RESULT_QUEUE = queue
+async def run_probe(args, pool: BrowserPool, result_queue: Queue) -> list:
+    """Una sonda: reutiliza un context del Chromium compartido."""
+    (probe_id, probe_index, flow_data, duration_sec, output_dir,
+     reference, slow_step_ms, lite) = args
 
-
-def run_worker(args):
-    """Worker process function."""
-    probe_id, flow_data, duration_sec, output_dir, headless, reference, slow_step_ms, lite = args
+    # Arranque escalonado para no abrir 100 contexts ni golpear el sitio
+    # en el mismo milisegundo.
+    await asyncio.sleep(min(probe_index * 0.02, 3.0))
 
     flow = Flow(**flow_data)
-    executor = FlowExecutor(probe_id=probe_id, output_dir=output_dir,
-                            reference=reference, slow_step_ms=slow_step_ms,
-                            lite=lite)
+    executor = FlowExecutor(
+        probe_id=probe_id,
+        output_dir=output_dir,
+        pool=pool,
+        probe_index=probe_index,
+        reference=reference,
+        slow_step_ms=slow_step_ms,
+        lite=lite,
+    )
 
     results = []
     end_time = datetime.now() + timedelta(seconds=duration_sec)
@@ -56,17 +68,55 @@ def run_worker(args):
     iteration = 0
     try:
         while iteration == 0 or datetime.now() < end_time:
-            res = executor.execute(flow, headless=headless)
+            res = await executor.execute(flow)
             payload = res.model_dump()
             results.append(payload)
-            if RESULT_QUEUE is not None:
-                RESULT_QUEUE.put(payload)
+            result_queue.put(payload)
             iteration += 1
     finally:
-        executor.browser_manager.close()
+        await executor.close()
 
     print(f"[{probe_id}] Finished. {iteration} iterations.")
     return results
+
+
+async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
+                   browsers, slow_shot, no_reference, result_queue) -> list:
+    pool = BrowserPool()
+    pages_per_browser = max(1, (users + browsers - 1) // browsers)
+    await pool.start(
+        count=browsers,
+        headless=not headed,
+        lite=lite,
+        pages_per_browser=pages_per_browser,
+    )
+    print(f"Chromium: {pool.browser_count} proceso(s), "
+          f"~{pages_per_browser} contexts c/u, "
+          f"renderer-limit={pool.renderer_cap}")
+
+    tasks = []
+    for i in range(users):
+        probe_id = f"probe-{i+1:02d}"
+        # Solo la primera sonda arma el recorrido de referencia: con 100 usuarios
+        # serían 100 copias idénticas del mismo flujo correcto.
+        args = (
+            probe_id, i, flow_data, duration_sec, run_output_dir,
+            i == 0 and not no_reference, slow_shot, lite,
+        )
+        tasks.append(asyncio.create_task(run_probe(args, pool, result_queue)))
+
+    total_results = []
+    try:
+        nested = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, item in enumerate(nested):
+            if isinstance(item, Exception):
+                print(f"[probe-{i+1:02d}] aborted: {item}")
+                traceback.print_exception(type(item), item, item.__traceback__)
+                continue
+            total_results.extend(item)
+    finally:
+        await pool.close()
+    return total_results
 
 
 @click.command()
@@ -85,9 +135,27 @@ def run_worker(args):
               help='No capturar el recorrido de referencia del flujo correcto')
 @click.option('--lite', is_flag=True,
               help='Chromium liviano: sin imágenes, video, fuentes ni animaciones')
+@click.option('--full', is_flag=True,
+              help='Forzar Chromium completo (usuario real), aunque haya muchas sondas')
+@click.option('--browsers', default=0, type=int,
+              help='Procesos Chromium compartidos. 0 = automático')
 def main(users, duration, flow, output, headed, controller_url, instance_id,
-         slow_shot, no_reference, lite):
+         slow_shot, no_reference, lite, full, browsers):
     """ARGOS .IA Stress Test Runner"""
+    if full and lite:
+        raise click.UsageError("usa --lite o --full, no ambos")
+
+    auto_lite = False
+    if not full and not lite and users >= AUTO_LITE_USERS:
+        lite = True
+        auto_lite = True
+    elif full:
+        lite = False
+
+    if browsers <= 0:
+        browsers = default_browsers(users, lite)
+    browsers = max(1, min(users, browsers))
+
     instance_id = instance_id or socket.gethostname()
     print(f"=== ARGOS .IA Stress Test ===")
     print(f"Users: {users}")
@@ -95,8 +163,15 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     print(f"Flow: {flow}")
     print(f"Output: {output}")
     print(f"Headless: {not headed}")
-    print(f"Browser: {'lite (mínimo recurso)' if lite else 'full (usuario real)'}")
+    if auto_lite:
+        print(f"Browser: lite (auto con {AUTO_LITE_USERS}+ usuarios; --full para usuario real)")
+    else:
+        print(f"Browser: {'lite (mínimo recurso)' if lite else 'full (usuario real)'}")
+    print(f"Chromium processes: {browsers} shared (not 1 per user)")
     print(f"Instance: {instance_id}")
+    if not lite and users >= 20:
+        print(f"[argos] aviso: {users} sondas en modo full saturan CPU. "
+              f"Para 100 usuarios en un servidor usa --lite.")
     if slow_shot:
         print(f"Slow shot: pasos correctos sobre {slow_shot:.0f} ms")
     if controller_url:
@@ -127,15 +202,7 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     os.makedirs(run_output_dir, exist_ok=True)
     started_at = datetime.now(timezone.utc).isoformat()
 
-    worker_args = []
-    for i in range(users):
-        probe_id = f"probe-{i+1:02d}"
-        # Solo la primera sonda arma el recorrido de referencia: con 100 usuarios
-        # serían 100 copias idénticas del mismo flujo correcto.
-        worker_args.append((probe_id, flow_data, duration_sec, run_output_dir, not headed,
-                            i == 0 and not no_reference, slow_shot, lite))
-
-    result_queue = multiprocessing.Queue()
+    result_queue = Queue()
     aggregator = LiveAggregator()
     stop_event = threading.Event()
     token = controller_token()
@@ -156,15 +223,10 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     total_results = []
     start_time = time.time()
     try:
-        if users == 1:
-            global RESULT_QUEUE
-            RESULT_QUEUE = result_queue
-            total_results.extend(run_worker(worker_args[0]))
-        else:
-            with multiprocessing.Pool(users, initializer=_init_worker, initargs=(result_queue,)) as pool:
-                results_nested = pool.map(run_worker, worker_args)
-                for r in results_nested:
-                    total_results.extend(r)
+        total_results = asyncio.run(run_load(
+            users, duration_sec, flow_data, run_output_dir, headed, lite,
+            browsers, slow_shot, no_reference, result_queue,
+        ))
     finally:
         stop_event.set()
         reporter.join(timeout=120)
