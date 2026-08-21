@@ -1,0 +1,240 @@
+# =============================================================================
+# TUTORIAL — cómo se escribe un flujo YAML de ARGOS
+# =============================================================================
+#
+# Este archivo ES un flujo de verdad (se puede correr contra zentriks.cl) y
+# al mismo tiempo es la receta comentada. Copialo a flows/mio.yaml, cambiá
+# las URLs/selectores y listo.
+#
+# NO toques flows/example.yaml: ese es el journey comercial de Zentriks,
+# corto y limpio para las corridas reales.
+#
+#
+# 1) QUÉ ES UN YAML
+# -----------------
+# Un archivo de texto con indentación de 2 espacios (NUNCA tabs).
+# Las líneas que empiezan con # son comentarios: ARGOS las ignora.
+# Los campos van "clave: valor". Las listas de pasos empiezan con "- ".
+#
+# Campos de ARRIBA del archivo (el flujo entero):
+#
+#   name          Obligatorio. Sale en el dashboard y en el PDF.
+#   description   Opcional. Texto largo (el ">" permite varias líneas).
+#   sla           Opcional. Umbrales de la corrida. Ver más abajo.
+#   steps         Obligatorio. La receta que repite cada sonda, en orden.
+#
+# Campos DE CADA PASO:
+#
+#   action        Obligatorio. Uno de: open_url | click | input | assert | wait
+#   value         URL (open_url), texto a tipear (input), milisegundos (wait)
+#   selector      CSS del elemento. Ej: 'a[href="/contacto"]'  o  "#usuario"
+#   xpath         Alternativa al CSS. Ej: "//h1[contains(., 'Bienvenido')]"
+#   timeout       Ms antes de marcar FAIL. Default 30000.
+#   description   TEXTO DEL INFORME. Escribilo SIEMPRE. Sin esto el PDF dice
+#                 "click" y el cliente no entiende nada.
+#
+# click / input / assert necesitan selector O xpath (uno de los dos).
+# open_url y wait usan value, no selector.
+#
+#
+# 2) USUARIOS: NO HAY BASE DE DATOS
+# ---------------------------------
+# ARGOS no tiene tabla de usuarios, ni MySQL, ni login propio.
+# Hay TRES cosas distintas que la gente mezcla:
+#
+#   a) --users N
+#        Cuántas sondas (navegadores) en paralelo. "50 usuarios" = 50 Chromium
+#        contexts repitiendo ESTE yaml. No son cuentas del sitio.
+#
+#   b) El CSV (--data)
+#        ESA es tu "tabla de usuarios". Una fila = un login / un SKU / una
+#        sucursal. El YAML pone {{usuario}} {{clave}} y ARGOS sustituye.
+#        Archivo de ejemplo: flows/tutorial-usuarios.csv
+#
+#        ./venv/bin/python runner.py --flow flows/tutorial.yaml \
+#            --data flows/tutorial-usuarios.csv --users 5 --duration 2m
+#
+#        Cada sonda toma una fila distinta (probe + iteración). Si hay más
+#        sondas que filas, se reciclan. Columnas con pass/clave/token/pwd
+#        NO se mandan al collector.
+#
+#   c) SQLite del collector (data/argos.db)
+#        Guarda heartbeats y journeys de la CORRIDA. No es el padrón de
+#        usuarios del sitio bajo prueba.
+#
+# Este tutorial corre SIN --data (Zentriks no pide login). El bloque
+# "login con CSV" está comentado al final para que lo copies a tu sitio.
+#
+#
+# 3) CÓMO CREAR EL TUYO, EN ORDEN
+# -------------------------------
+#   1. Copiá este archivo:  cp flows/tutorial.yaml flows/mio.yaml
+#   2. Cambiá name y description.
+#   3. Abrí el sitio en Chrome → F12 → click derecho en el botón →
+#      "Copy → Copy selector" (CSS) o "Copy XPath".
+#   4. Reemplazá cada value / selector / xpath por los de TU sitio.
+#   5. Entre página y página dejá un wait con rango ("4000-9000"), no un
+#      número fijo: si no, todas las sondas golpean juntas.
+#   6. Validá ANTES de la rampa:
+#
+#        ./venv/bin/python runner.py --users 1 --duration 1s \
+#            --flow flows/mio.yaml --headed
+#
+#      La primera iteración siempre termina aunque el tiempo se acabe.
+#      Si un selector está mal, vas a ver el FAIL y el pantallazo en results/.
+#
+#
+# 4) LAS CINCO ACCIONES (resumen)
+# -------------------------------
+#   open_url  Navega a value. Espera domcontentloaded, no a que cargue todo.
+#   click     Click en selector o xpath.
+#   input     Escribe value en el campo (login, búsqueda, formulario).
+#   assert    Espera a que el elemento esté VISIBLE. Si no aparece → FAIL.
+#   wait      Pausa. "5000" = 5 s fijos. "4000-9000" = sorteo (USÁ ESTE).
+#
+# Si un paso falla: PNG + HTML en results/, el journey se CORTA, la sonda
+# arranca de cero. Por eso los pasos del final tienen menos muestras.
+#
+# =============================================================================
+
+name: "Tutorial — journey comentado (Zentriks)"
+description: >
+  Plantilla para aprender a escribir un YAML. Recorre zentriks.cl como
+  example.yaml, pero cada paso está explicado. Sirve para copiar y adaptar
+  a otro sitio. No reemplaza a example.yaml en las corridas comerciales.
+
+  Usuarios: --users N son sondas en paralelo, no cuentas. Si el sitio pide
+  login, descomentá el bloque del final y pasá --data flows/tutorial-usuarios.csv.
+
+  Collector / "BD": el SQLite del Live Room guarda la corrida, no el padrón
+  de usuarios. El padrón es el CSV.
+
+# Umbrales opcionales. Sin este bloque la corrida igual corre; con él el
+# runner imprime SLA PASS/FAIL y sale 1 si no se cumplió, 2 si abortó.
+sla:
+  error_rate: 0.05            # máximo 5% de journeys fallidos al terminar
+  p95_active_ms: 8000         # p95 del tiempo ACTIVO (sin los wait)
+  apdex: 0.85
+  abort_error_rate: 0.40      # cortar a mitad si el error llega a 40%
+  abort_cpu_percent: 90       # cortar si la CPU del GENERADOR llega a 90%
+  abort_grace_s: 60           # no abortar en el primer minuto
+
+steps:
+  # --- 1. open_url: siempre el primer paso. value = URL completa ----------
+  - action: open_url
+    value: "https://www.zentriks.cl/"
+    timeout: 30000
+    description: "Abrir home Zentriks"
+
+  # --- 2. assert: validá que la página ES la que esperabas -----------------
+  # Sin assert, un 200 de una página de error igual cuenta como OK.
+  # xpath busca texto visible. contains(., '...') = el nodo incluye ese texto.
+  - action: assert
+    xpath: "//h1[contains(., 'Pon tu plataforma al límite')]"
+    timeout: 15000
+    description: "Home: H1 de propuesta de valor"
+
+  # --- 3. wait: think time. SIEMPRE un rango, nunca un número fijo --------
+  - action: wait
+    value: "4000-9000"
+    description: "Lee el hero y decide si le interesa"
+
+  # --- 4. click: CSS entre comillas simples si el selector lleva " --------
+  - action: click
+    selector: 'a[href="/beneficios"]'
+    timeout: 10000
+    description: "Ir a Beneficios"
+  - action: assert
+    xpath: "//h1[contains(., 'El robot que pone tu plataforma al límite')]"
+    timeout: 15000
+    description: "Beneficios: H1 visible"
+  - action: wait
+    value: "5000-11000"
+    description: "Revisa los beneficios en detalle"
+
+  - action: click
+    selector: 'a[href="/peak"]'
+    timeout: 10000
+    description: "Ir a Peak"
+  - action: assert
+    xpath: "//h1[contains(., 'Tu plataforma soporta')]"
+    timeout: 15000
+    description: "Peak: H1 visible"
+  - action: wait
+    value: "4000-9000"
+    description: "Evalúa el caso de uso de peak"
+
+  - action: click
+    selector: 'a[href="/conoce-robots"]'
+    timeout: 10000
+    description: "Ir a familia de robots"
+  - action: assert
+    xpath: "//h1[contains(., 'Conoce a nuestros robots')]"
+    timeout: 15000
+    description: "Robots: H1 visible"
+  - action: wait
+    value: "6000-14000"
+    description: "Compara los robots del catálogo"
+
+  - action: click
+    selector: 'a[href="/contactos"]'
+    timeout: 10000
+    description: "Ir a Contacto"
+  - action: assert
+    xpath: "//h1[contains(., 'Agenda tu demo')]"
+    timeout: 15000
+    description: "Contacto: H1 de agenda demo"
+  - action: wait
+    value: "3000-7000"
+    description: "Evalúa el formulario antes de agendar"
+
+  # --- input: este sitio no tiene login, así que no hay un input real. ----
+  # Si tu sitio tiene un buscador o un formulario, el paso se ve así:
+  #
+  # - action: input
+  #   selector: "#q"
+  #   value: "carga"
+  #   timeout: 10000
+  #   description: "Escribir término de búsqueda"
+
+# =============================================================================
+# APÉNDICE — login con "tabla de usuarios" (CSV). NO está activo.
+# Copiá estos pasos DENTRO de steps: y reemplazá selectores/URL.
+# Después:  --data flows/tutorial-usuarios.csv
+#
+#   - action: open_url
+#     value: "https://tu-sitio.cl/login"
+#     timeout: 30000
+#     description: "Abrir login"
+#
+#   - action: input
+#     selector: "#usuario"
+#     value: "{{usuario}}"
+#     timeout: 10000
+#     description: "Ingresar usuario de la fila CSV"
+#
+#   - action: input
+#     selector: "#clave"
+#     value: "{{clave}}"
+#     timeout: 10000
+#     description: "Ingresar clave de la fila CSV"
+#
+#   - action: click
+#     selector: "button[type=submit]"
+#     timeout: 10000
+#     description: "Enviar login"
+#
+#   - action: assert
+#     xpath: "//h1[contains(., 'Bienvenido')]"
+#     timeout: 15000
+#     description: "Login OK: home autenticado"
+#
+#   - action: open_url
+#     value: "https://tu-sitio.cl/p/{{sku}}"
+#     timeout: 30000
+#     description: "Abrir ficha del SKU de esa fila"
+#
+# {{usuario}} {{clave}} {{sku}} {{sucursal}} tienen que existir como
+# COLUMNAS en el CSV (cabecera de la primera línea). Si el YAML pide un
+# campo que el CSV no tiene, el runner corta al arrancar.
+# =============================================================================

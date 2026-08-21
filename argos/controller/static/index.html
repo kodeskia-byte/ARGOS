@@ -179,6 +179,25 @@
   .unit .pill.warn{background:#6a4a12;color:#ffe3a3}
   .unit .who{min-width:0}
   .unit .top{margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .unit.tone-ok{border-color:#22c55e;box-shadow:0 8px 24px rgba(15,157,88,.18), inset 0 1px 0 rgba(255,255,255,.12)}
+  .unit.tone-fail{border-color:#ef4444;box-shadow:0 8px 24px rgba(220,53,69,.22), inset 0 1px 0 rgba(255,255,255,.12)}
+  .unit.tone-fail.idle{border-color:#9aa8bc;opacity:.88}
+  .fail-panel{margin-top:12px;border:1px solid #f5c2c7;background:#fff7f8;
+    border-radius:14px;padding:14px 16px}
+  .fail-panel h4{margin:0 0 10px;font-size:14px;color:var(--bad)}
+  .fail-item{display:grid;grid-template-columns:132px 1fr;gap:12px;align-items:start;
+    background:#fff;border:1px solid #f1d0d3;border-radius:12px;padding:10px;margin-bottom:10px}
+  .fail-item:last-child{margin-bottom:0}
+  .fail-item img{width:132px;height:88px;object-fit:cover;object-position:top;border-radius:8px;
+    background:#f0f4fa;display:block}
+  .fail-item .meta{font-size:13px;min-width:0}
+  .fail-item .meta b{display:block;margin-bottom:2px}
+  .fail-item .err{color:var(--bad);font-size:12px;word-break:break-word;margin:6px 0 0;
+    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-height:72px;overflow:hidden}
+  @media (max-width:640px){
+    .fail-item{grid-template-columns:1fr}
+    .fail-item img{width:100%;height:140px}
+  }
   .howto{background:#eaf1ff;border:1px solid var(--blue-line);border-radius:var(--radius);
     padding:14px 18px;margin-bottom:18px;font-size:14px;line-height:1.55}
   .howto b{color:var(--blue-dark)}
@@ -276,9 +295,10 @@
     <p class="muted" id="live-sub">Esperando que arranque una carga…</p>
     <div class="howto">
       <b>Flujo del operador.</b> Lanzas <b>una carga</b> (un runner, o hasta 10
-      generadores a la misma hora). Aquí aparece como un solo bloque. Dentro
-      están los generadores; las sondas (robots) se abren ahí, no en la portada.
-      El histórico, pestaña <b>Cargas</b>, agrupa por fecha y hora de ejecución.
+      generadores a la misma hora). Aquí aparece como un solo bloque. Dentro de
+      cada generador hay <b>dos tarjetas</b>: journeys correctos e incorrectos.
+      Los robots no se listan uno a uno. Click en <b>Incorrectos</b> para ver
+      las fallas (sonda, paso, pantallazo). El histórico está en <b>Cargas</b>.
     </div>
     <div id="live-kpis" class="kpis"></div>
     <div id="fleet"></div>
@@ -333,7 +353,7 @@
     <div class="scroll" id="detail-steps" style="margin-bottom:26px"></div>
     <h3>Evidencias de error</h3>
     <div id="detail-shots" style="margin-bottom:26px"></div>
-    <h3>Detalle por sonda</h3>
+    <h3>Sondas con fallos</h3>
     <div id="detail-sondas"></div>
   </section>
 </main>
@@ -347,7 +367,7 @@ let timer = null;
 let inspectSel = null;
 let baselines = [];
 const STATUS = {running:"EN LÍNEA", finished:"FINALIZADO", offline:"SIN CONEXIÓN"};
-const openSondas = new Set();
+const openFails = new Set();
 
 /* ---------- formatters ---------- */
 const nf = new Intl.NumberFormat("es-CL");
@@ -863,37 +883,88 @@ function expectedProbes(inst){
   return list;
 }
 
-function unitCard(inst, probe, index){
+function outcomeCard(inst, kind){
   const online = inst.online;
-  const waiting = probe.pending && online;
-  const failed = (probe.fail || 0) > 0;
-  const led = !online ? "off" : (failed ? "err" : (waiting ? "wait" : "on"));
-  const pill = !online ? "off" : (failed ? "err" : (waiting ? "warn" : "on"));
-  const label = !online ? (STATUS[inst.status] || "SIN CONEXIÓN")
-    : (waiting ? "ARMANDO" : (failed ? "CON FALLOS" : "EN LÍNEA"));
-  const code = unitCode(inst.instance_id, probe.probe_id || `probe-${index + 1}`);
-  return `<article class="unit ${online ? "" : "offline"}"
+  const ok = inst.ok || inst.successes || 0;
+  const fail = inst.fail || inst.failures || 0;
+  const units = expectedProbes(inst);
+  const failProbes = units.filter(p => (p.fail || 0) > 0).length;
+  const isFail = kind === "fail";
+  const idle = isFail && !fail;
+  const waiting = online && !ok && !fail;
+  const led = !online ? "off" : (isFail ? (fail ? "err" : "off") : (waiting ? "wait" : "on"));
+  const pill = !online ? "off" : (isFail ? (fail ? "err" : "off") : (waiting ? "warn" : "on"));
+  const label = !online
+    ? (STATUS[inst.status] || "SIN CONEXIÓN")
+    : (isFail ? (fail ? "CON FALLOS" : "SIN FALLOS") : (waiting ? "ARMANDO" : "EN LÍNEA"));
+  const digits = String(inst.instance_id || "GEN").match(/(\d+)/);
+  const instShort = digits
+    ? "G" + digits[1].padStart(2, "0")
+    : "GEN";
+  const code = `ZL-${instShort}-${isFail ? "KO" : "OK"}`;
+  return `<article class="unit ${online ? "" : "offline"} ${isFail ? "tone-fail" : "tone-ok"} ${idle ? "idle" : ""}"
       data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}"
-      title="${esc(code)}">
+      data-kind="${kind}" title="${esc(code)}">
     <div class="portrait">
-      <img src="/static/z-load.png" alt="Z-Load ${esc(code)}">
+      <img src="/static/z-load.png" alt="${isFail ? "Incorrectos" : "Correctos"}">
       <span class="led ${led}" title="${esc(label)}"></span>
     </div>
     <div class="who">
       <div class="top">
-        <div class="callsign">Unidad ${String(index + 1).padStart(2, "0")} · Zentriks</div>
+        <div class="callsign">${isFail ? "Incorrectos" : "Correctos"} · Zentriks</div>
         <span class="pill ${pill}">${esc(label)}</span>
       </div>
       <div class="name">Z-Load <em>· Stress</em></div>
       <div class="code">${esc(code)}</div>
       <div class="rows">
-        <span>Sonda</span><b>${esc(probe.probe_id)}</b>
-        <span>Journeys</span><b>${nf.format(probe.journeys || 0)}</b>
-        <span>OK / FAIL</span><b>${nf.format(probe.ok || 0)} / ${nf.format(probe.fail || 0)}</b>
+        <span>Journeys</span><b>${nf.format(isFail ? fail : ok)}</b>
+        <span>Sondas</span><b>${isFail
+          ? `${nf.format(failProbes)} con fallos`
+          : `${nf.format(Math.max(0, units.length - failProbes))} ok`}</b>
         <span>Generador</span><b>${esc(inst.instance_id)}</b>
+        <span>${isFail ? "Último error" : "P95"}</span><b>${isFail
+          ? esc(fail && inst.last_error ? String(inst.last_error).slice(0, 42) : "—")
+          : ms(inst.p95_ms)}</b>
       </div>
     </div>
   </article>`;
+}
+
+function failPanel(inst, opened){
+  const fail = inst.fail || inst.failures || 0;
+  const items = inst.recent_failures || [];
+  const failedProbes = (inst.probes || []).filter(p => (p.fail || 0) > 0);
+  if(!opened) return "";
+  if(!fail && !items.length){
+    return `<div class="fail-panel"><h4>Sin fallos en ${esc(inst.instance_id)}</h4>
+      <p class="muted" style="margin:0">Cuando un journey falle, acá aparecen la sonda, el paso y el pantallazo.</p></div>`;
+  }
+  const list = items.length
+    ? items.map(f => `<article class="fail-item">
+        ${f.screenshot_url
+          ? `<a href="${esc(f.screenshot_url)}" target="_blank" rel="noopener">
+               <img src="${esc(f.screenshot_url)}" alt="fallo ${esc(f.probe_id || "")}"></a>`
+          : `<div class="empty" style="height:88px;padding:16px 8px">sin imagen aún</div>`}
+        <div class="meta">
+          <b>${esc(f.probe_id || "sonda")}</b>
+          <span class="muted">paso ${f.step_index == null ? "—" : f.step_index}
+            ${f.label ? " · " + esc(f.label) : ""} · ${clock(f.ts)}</span>
+          ${f.error ? `<p class="err">${esc(f.error)}</p>` : ""}
+          ${f.dom_url ? `<a href="${esc(f.dom_url)}" target="_blank" rel="noopener">Ver DOM</a>` : ""}
+        </div>
+      </article>`).join("")
+    : failedProbes.map(p => `<article class="fail-item">
+        <div class="empty" style="height:88px;padding:16px 8px">${nf.format(p.fail)} FAIL</div>
+        <div class="meta">
+          <b>${esc(p.probe_id)}</b>
+          <span class="muted">${nf.format(p.ok)} OK / ${nf.format(p.fail)} FAIL</span>
+        </div>
+      </article>`).join("");
+  return `<div class="fail-panel">
+    <h4>Fallos de ${esc(inst.instance_id)} · ${nf.format(fail)} journeys</h4>
+    ${list || `<p class="muted" style="margin:0">Los pantallazos llegan con el envío de resultados (cada 1 min).</p>`}
+    <p class="muted" style="margin:10px 0 0">Click en el nombre del generador para el informe completo.</p>
+  </div>`;
 }
 
 function generatorBlock(inst, opts){
@@ -911,15 +982,11 @@ function generatorBlock(inst, opts){
     ? (STATUS[inst.status] || inst.status)
     : (inst.finished ? "FINALIZADO" : "EN CURSO");
   const memText = r.mem_used_mb ? `${Math.round(r.mem_used_mb)} / ${Math.round(r.mem_total_mb||0)} MB` : null;
-  const sondaFail = units.filter(p => (p.fail || 0) > 0).length;
-  const sondaWait = units.filter(p => p.pending).length;
   const summary = live
-    ? `Ver ${nf.format(sondas)} sonda${sondas === 1 ? "" : "s"} de este generador` +
-      (sondaFail ? ` · ${sondaFail} con fallos` : "") +
-      (sondaWait ? ` · ${sondaWait} armando` : "")
+    ? `${nf.format(sondas)} sonda${sondas === 1 ? "" : "s"} · dos tarjetas: correctos e incorrectos`
     : `Este generador llevó ${nf.format(sondas)} sonda${sondas === 1 ? "" : "s"}`;
   const key = `${inst.instance_id}:${inst.run_id}`;
-  const opened = openSondas.has(key);
+  const opened = openFails.has(key);
   return `<div class="gen" data-instance="${esc(inst.instance_id)}" data-run="${esc(inst.run_id)}">
     <div class="gen-head">
       <span class="gen-name">${esc(inst.instance_id)}</span>
@@ -932,11 +999,11 @@ function generatorBlock(inst, opts){
       ${meter("CPU del generador", r.cpu_percent, r.cpu_percent != null ? r.cpu_percent + "%" : null)}
       ${meter("Memoria", r.mem_percent, memText)}
       ${r.browser_processes ? `<div class="legend"><span>${nf.format(r.browser_processes)} procesos de navegador · load ${r.load1 ?? "—"}</span></div>` : ""}
-      ${inst.last_error ? `<div class="legend" style="color:var(--bad)">${esc(String(inst.last_error).slice(0,160))}</div>` : ""}
-      <details class="sonda-box"${opened ? " open" : ""}>
-        <summary>${esc(summary)}</summary>
-        <div class="fleet" style="margin-top:12px">${units.map((p, i) => unitCard(inst, p, i)).join("")}</div>
-      </details>` : `
+      <div class="fleet" style="margin-top:12px">
+        ${outcomeCard(inst, "ok")}
+        ${outcomeCard(inst, "fail")}
+      </div>
+      ${failPanel(inst, opened)}` : `
       <div class="muted" style="margin:6px 0 0">${esc(summary)}. Click en el generador para su informe.</div>`}
   </div>`;
 }
@@ -1010,7 +1077,7 @@ async function loadLive(){
   if(!clusters.length){
     $("fleet").innerHTML = `<div class="card empty">No hay carga en curso. Lanza un runner
       (uno o hasta 10 generadores a la misma hora) y esta prueba aparece aquí como un solo
-      bloque. Las sondas se ven dentro de cada generador.</div>`;
+      bloque. En cada generador ves dos tarjetas: correctos e incorrectos.</div>`;
     return;
   }
   $("fleet").innerHTML = clusters.map(c => cargaCard(c, {live: true})).join("");
@@ -1046,29 +1113,21 @@ function bindCargaClicks(root){
       }
     };
   });
-  root.querySelectorAll(".sonda-box").forEach(box => {
-    box.addEventListener("toggle", () => {
-      const gen = box.closest(".gen");
-      const key = `${gen.dataset.instance}:${gen.dataset.run}`;
-      if(box.open) openSondas.add(key);
-      else openSondas.delete(key);
-    });
-    const summary = box.querySelector("summary");
-    if(summary){
-      summary.onclick = (ev) => ev.stopPropagation();
-    }
-  });
   root.querySelectorAll(".gen").forEach(el => {
     const open = () => openDetail(el.dataset.instance, el.dataset.run);
     el.querySelector(".gen-head").onclick = (ev) => {
-      if(ev.target.closest("details, button, a, .pick, summary")) return;
+      if(ev.target.closest("button, a, .pick, .unit, .fail-panel")) return;
       open();
     };
   });
   root.querySelectorAll(".unit").forEach(el => {
     el.onclick = (ev) => {
       ev.stopPropagation();
-      openDetail(el.dataset.instance, el.dataset.run);
+      if(el.dataset.kind !== "fail") return;
+      const key = `${el.dataset.instance}:${el.dataset.run}`;
+      if(openFails.has(key)) openFails.delete(key);
+      else openFails.add(key);
+      if(view === "live") loadLive();
     };
   });
 }
@@ -1158,7 +1217,7 @@ async function loadRuns(date){
     `<div class="levels">
       <span><b>1. Carga</b> · fecha y hora</span>
       <span><b>2. Generador</b> · máquina</span>
-      <span><b>3. Sondas</b> · robots de ese generador</span>
+      <span><b>3. Correctos / incorrectos</b> · en el Live Room</span>
      </div>
      <div class="kpis">
       ${kpi("Cargas", nf.format(clusters.length), windowLabel, "blue")}
@@ -1780,11 +1839,8 @@ function renderNeck(stats){
   $("detail-neck").innerHTML = parts.join("");
 }
 
-function renderSondas(stats){
-  const probes = stats.probes || [];
-  if(!probes.length){ $("detail-sondas").innerHTML = `<div class="card empty">Sin sondas.</div>`; return; }
-  $("detail-sondas").innerHTML = probes.map(p => `
-    <details class="card sonda">
+function sondaBlock(p, open){
+  return `<details class="card sonda"${open ? " open" : ""}>
       <summary>
         ${esc(p.probe_id)}
         <span class="pill ${p.fail ? "err" : "on"}">${nf.format(p.ok)} OK / ${nf.format(p.fail)} FAIL</span>
@@ -1805,7 +1861,25 @@ function renderSondas(stats){
         <div class="scroll" style="margin-bottom:14px">${metricsTable(p)}</div>
         <div class="scroll">${stepsTable(p.steps)}</div>
       </div>
-    </details>`).join("");
+    </details>`;
+}
+
+function renderSondas(stats){
+  const probes = stats.probes || [];
+  if(!probes.length){ $("detail-sondas").innerHTML = `<div class="card empty">Sin sondas.</div>`; return; }
+  const failed = probes.filter(p => p.fail);
+  const ok = probes.filter(p => !p.fail);
+  const failHtml = failed.length
+    ? failed.map(p => sondaBlock(p, true)).join("")
+    : `<div class="card empty">Ninguna sonda falló.</div>`;
+  const okHtml = ok.length
+    ? `<details class="card sonda">
+        <summary>Sondas correctas · ${nf.format(ok.length)}
+          <span class="pill on">sin fallos</span></summary>
+        <div class="body">${ok.map(p => sondaBlock(p, false)).join("")}</div>
+      </details>`
+    : "";
+  $("detail-sondas").innerHTML = failHtml + okHtml;
 }
 
 async function openDetail(instance, run){

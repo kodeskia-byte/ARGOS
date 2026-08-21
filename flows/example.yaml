@@ -1,13 +1,11 @@
 name: "Zentriks — journey comercial con think time"
 description: >
   Visitante profesional evaluando el producto: home → beneficios → peak →
-  robots → contacto. Entre página y página hay pausas aleatorias que simulan
-  el tiempo que una persona real dedica a leer. Los rangos "min-max" se
-  sortean en cada iteración para que las sondas no queden sincronizadas.
+  robots → contacto. Completa el formulario de demo con nombre, email,
+  teléfono, empresa y mensaje distintos en cada vuelta, y envía la solicitud.
 
-  Sin estas pausas cada sonda navega sin parar y consume ~0,9 vCPU, un ritmo
-  que ningún usuario humano tiene: satura el generador y las métricas miden
-  la contención de CPU propia en vez del sitio objetivo.
+  Cada envío es una solicitud real a /contactos. Filtrá en la bandeja por
+  "ARGOS carga" o el dominio @example.com.
 
 steps:
   # 1. Home — llega desde una búsqueda y escanea la propuesta de valor
@@ -62,7 +60,7 @@ steps:
     value: "6000-14000"
     description: "Compara los robots del catálogo"
 
-  # 5. Contacto — la conversión, mira el formulario antes de decidir
+  # 5. Contacto — completa y envía el formulario de demo
   - action: click
     selector: 'a[href="/contactos"]'
     timeout: 10000
@@ -72,5 +70,41 @@ steps:
     timeout: 15000
     description: "Contacto: H1 de agenda demo"
   - action: wait
-    value: "3000-7000"
-    description: "Evalúa el formulario antes de agendar"
+    value: "2000-5000"
+    description: "Lee el formulario antes de completarlo"
+  - action: input
+    selector: "#nombre"
+    value: "{{rand.nombre}}"
+    timeout: 10000
+    description: "Escribir nombre"
+  - action: input
+    selector: "#email"
+    value: "{{rand.email}}"
+    timeout: 10000
+    description: "Escribir email"
+  - action: input
+    selector: "#telefono"
+    value: "{{rand.telefono}}"
+    timeout: 10000
+    description: "Escribir teléfono"
+  - action: input
+    selector: "#empresa"
+    value: "{{rand.empresa}}"
+    timeout: 10000
+    description: "Escribir empresa"
+  - action: input
+    selector: "#mensaje"
+    value: "{{rand.mensaje}}"
+    timeout: 10000
+    description: "Escribir qué quiere probar"
+  - action: wait
+    value: "1500-4000"
+    description: "Revisa el mensaje antes de enviar"
+  - action: click
+    selector: 'form[action="/contactos"] button[type=submit]'
+    timeout: 20000
+    description: "Enviar solicitud de demo"
+  - action: assert
+    selector: ".flash.ok"
+    timeout: 15000
+    description: "Contacto: confirmación de envío"

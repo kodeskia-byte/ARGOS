@@ -13,7 +13,15 @@ from datetime import datetime, timedelta, timezone
 from queue import Queue
 
 from argos.models.flow import Flow
-from argos.dataset import apply_row, load_csv, missing_columns, placeholders, row_for, strip_secrets
+from argos.dataset import (
+    apply_random,
+    apply_row,
+    load_csv,
+    missing_columns,
+    placeholders,
+    row_for,
+    strip_secrets,
+)
 from argos.probe.browser import BrowserPool, default_browsers
 from argos.probe.executor import FlowExecutor
 from argos.probe.resources import ResourceSampler
@@ -68,9 +76,12 @@ async def run_probe(args, pool: BrowserPool, result_queue: Queue,
                 continue
             current = flow
             row = None
+            flow_now = flow_data
             if dataset:
                 row = row_for(dataset, probe_index, iteration)
-                current = Flow(**apply_row(flow_data, row))
+                flow_now = apply_row(flow_data, row)
+            flow_now = apply_random(flow_now)
+            current = Flow(**flow_now)
             res = await executor.execute(current)
             payload = res.model_dump()
             payload["vu_target"] = control.target_users

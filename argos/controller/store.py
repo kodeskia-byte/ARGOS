@@ -315,6 +315,7 @@ class Store:
                 "last_error": payload.get("last_error"),
                 "resources": payload.get("resources") or last_resources.get(row["instance_id"]) or {},
                 "probes": self._probe_summaries(row["instance_id"], row["run_id"]),
+                "recent_failures": self._recent_failures(row["instance_id"], row["run_id"]),
             }
             instances.append(item)
             if online:
@@ -362,6 +363,50 @@ class Store:
             }
             for row in rows
         ]
+
+    def _recent_failures(self, instance_id: str, run_id: str, limit: int = 12) -> List[dict]:
+        """Last failed journeys of a run, with screenshot URL when the ingest stored one."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT ts, probe_id, error, payload
+                FROM journeys
+                WHERE instance_id = ? AND run_id = ? AND success = 0
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (instance_id, run_id, limit),
+            ).fetchall()
+        items = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                payload = {}
+            shot_url = None
+            step_index = None
+            label = None
+            for step in payload.get("step_results") or []:
+                if step.get("status") != "FAIL":
+                    continue
+                step_index = step.get("step_index")
+                label = step.get("description") or step.get("action")
+                shot_url = step.get("screenshot_url")
+                break
+            items.append({
+                "ts": row["ts"],
+                "probe_id": row["probe_id"],
+                "error": (row["error"] or payload.get("error") or "")[:240],
+                "step_index": step_index,
+                "label": label,
+                "screenshot_url": shot_url,
+                "dom_url": next(
+                    (s.get("dom_url") for s in (payload.get("step_results") or [])
+                     if s.get("status") == "FAIL" and s.get("dom_url")),
+                    None,
+                ),
+            })
+        return items
 
     def _safe(self, value: str) -> Optional[str]:
         if value and SAFE_NAME.match(value):

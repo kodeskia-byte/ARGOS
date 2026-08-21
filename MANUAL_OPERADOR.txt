@@ -29,6 +29,7 @@ Todos los comandos de aquí están probados. Si uno falla, revisa la sección 13
  13. Problemas frecuentes
  14. Referencia rápida de comandos
  15. Glosario de métricas
+ 16. OpenObserve: monitorear el servidor (CPU/RAM)
 
 
 -------------------------------------------------------------------------------
@@ -155,7 +156,12 @@ ahí y te sale un error de argumentos.
 4. CÓMO SE ESCRIBE UN FLUJO (YAML)
 -------------------------------------------------------------------------------
 
-Un flujo es la receta que repite cada sonda. Vive en flows/ y tiene esta forma:
+Un flujo es la receta que repite cada sonda. Vive en flows/. El archivo
+comentado de cabo a rabo (cómo se escribe, usuarios, CSV, SLA, las cinco
+acciones) es flows/tutorial.yaml. Copialo a flows/mio.yaml y cambia las
+URLs. example.yaml es el journey corto de Zentriks para corridas reales.
+
+Forma mínima:
 
     name: "Nombre corto que sale en los informes"
     description: >
@@ -1191,6 +1197,15 @@ El runner demora más que el --duration que le pedí
 14. REFERENCIA RÁPIDA DE COMANDOS
 -------------------------------------------------------------------------------
 
+Excel del operador (SSH, instalar, un comando por gen-01…gen-10):
+
+    deploy/comandos-operador.xlsx
+
+Completá la hoja "1. Config" y las IP en "2. Generadores". Después copiá
+la celda de "6. Lanzar RAMPA". Si cambian las IP, regenerá el archivo:
+
+    ./venv/bin/python deploy/build_comandos_xlsx.py
+
 INSTALACIÓN
     ./deploy/setup.sh                       Prepara la máquina como generador
     ./deploy/setup.sh --with-collector      Además instala el collector
@@ -1261,6 +1276,17 @@ VARIABLES DE ENTORNO
     export ARGOS_INSTANCE_ID=gen-01
     export ARGOS_TOKEN=un-secreto-largo
     export ARGOS_DB=/var/lib/argos/argos.db
+    export OPENOBSERVE_PASSWORD=tu-clave     Agente de host (sección 16)
+
+OPENOBSERVE (CPU/RAM del generador; no reemplaza el Live Room)
+    docker run --name openobserve -d --restart unless-stopped \
+        -p 5080:5080 \
+        -e ZO_ROOT_USER_EMAIL="root@example.com" \
+        -e ZO_ROOT_USER_PASSWORD="$OPENOBSERVE_PASSWORD" \
+        o2cr.ai/openobserve/openobserve:latest
+    ssh -N -R 8080:127.0.0.1:8080 -R 5080:127.0.0.1:5080 root@IP
+    ./venv/bin/python -m argos.observe --instance-id gen-01 --once
+    http://127.0.0.1:5080   Logs → stream argos_host
 
 MANTENIMIENTO
     git pull                                Traer últimos cambios
@@ -1623,6 +1649,68 @@ Curva de carga
     p95 del tiempo activo contra la cantidad de usuarios, con la tasa
     de error superpuesta. Solo aparece si las corridas comparadas
     tienen distinto --users.
+
+
+-------------------------------------------------------------------------------
+16. OPENOBSERVE: MONITOREAR EL SERVIDOR (CPU/RAM)
+-------------------------------------------------------------------------------
+
+OpenObserve (https://openobserve.ai/) es el panel de la MÁQUINA generadora:
+CPU, RAM, load y procesos Chromium. El Live Room (puerto 8080) sigue siendo
+el panel de la PRUEBA DE CARGA (journeys, p95, errores). No se reemplazan.
+
+Instalación: Docker en tu PC. El agente corre EN el generador y manda
+muestras cada 15 s al mismo OpenObserve, usando un túnel inverso igual que
+el collector.
+
+PASO 1 — PC: levantar OpenObserve
+
+    Elegí una clave (no dejes la de ejemplo de la web):
+
+        export OPENOBSERVE_PASSWORD='una-clave-tuya'
+
+    docker run --name openobserve -d --restart unless-stopped \
+        -p 127.0.0.1:5080:5080 \
+        -e ZO_ROOT_USER_EMAIL="root@example.com" \
+        -e ZO_ROOT_USER_PASSWORD="$OPENOBSERVE_PASSWORD" \
+        o2cr.ai/openobserve/openobserve:latest
+
+    Abrí http://127.0.0.1:5080 y entrá con root@example.com + esa clave.
+
+PASO 2 — PC: túnel (collector 8080 + OpenObserve 5080)
+
+    Si ya tenías el túnel del 8080, cerralo y usá este, que lleva los dos:
+
+        ssh -N -R 8080:127.0.0.1:8080 -R 5080:127.0.0.1:5080 root@216.185.51.83
+
+    En el servidor, localhost:5080 apunta a OpenObserve en tu PC.
+
+PASO 3 — servidor: mandar un pulso de prueba
+
+        cd ~/ARGOS && git pull
+        export OPENOBSERVE_PASSWORD='la-misma-clave'
+        ./venv/bin/python -m argos.observe --instance-id gen-01 --once
+
+    Si imprime cpu=... mem=... está vivo. En OpenObserve: Logs → stream
+    argos_host. Si POST failed: connection refused, el túnel del 5080 no
+    está. Si HTTP 401, la clave no coincide.
+
+PASO 4 — servidor: dejarlo corriendo (otra terminal, junto al runner)
+
+        export OPENOBSERVE_PASSWORD='la-misma-clave'
+        ./venv/bin/python -m argos.observe --instance-id gen-01
+
+    Cada 15 s manda cpu_percent, mem_percent, load1, load5 y
+    browser_processes. Durante la rampa deberías ver CPU subir y
+    browser_processes crecer; si CPU se va de 75%, el generador se quedó
+    corto (misma regla que el Live Room).
+
+Consulta SQL en OpenObserve (Logs → SQL):
+
+    SELECT ts, instance_id, cpu_percent, mem_percent, load1, browser_processes
+    FROM argos_host
+    ORDER BY ts DESC
+    LIMIT 50
 
 
 ===============================================================================
