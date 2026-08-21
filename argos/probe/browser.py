@@ -1,5 +1,6 @@
 import os
-from typing import List, Optional
+from urllib.parse import urlparse
+from typing import Callable, List, Optional
 
 from playwright.async_api import Browser, BrowserContext, Playwright, async_playwright
 
@@ -123,33 +124,50 @@ class BrowserPool:
             raise RuntimeError("BrowserPool.start() was not called")
         return self._browsers[index % len(self._browsers)]
 
-    async def new_context(self, browser: Browser) -> BrowserContext:
+    async def new_context(self, browser: Browser, header_fn: Optional[Callable] = None,
+                          origin: Optional[str] = None) -> BrowserContext:
         kwargs = {}
         if self.lite:
             kwargs["reduced_motion"] = "reduce"
             kwargs["viewport"] = {"width": 1280, "height": 720}
         context = await browser.new_context(**kwargs)
-        await self.prepare_context(context)
+        await self.prepare_context(context, header_fn=header_fn, origin=origin)
         return context
 
-    async def prepare_context(self, context: BrowserContext):
-        """Corta imágenes, fuentes, video y animaciones CSS. Solo modo --lite."""
-        if not self.lite:
-            return
+    async def prepare_context(self, context: BrowserContext,
+                              header_fn: Optional[Callable] = None,
+                              origin: Optional[str] = None):
+        """Lite (corta media) + headers ARGOS solo en first-party y documentos.
 
-        async def _lite_route(route):
-            if route.request.resource_type in LITE_BLOCK:
+        No se etiquetan terceros (analytics, CDN ajeno): un header custom
+        dispararía CORS preflight y rompería el sitio bajo prueba.
+        """
+        need_route = self.lite or header_fn
+
+        async def handler(route):
+            req = route.request
+            if self.lite and req.resource_type in LITE_BLOCK:
                 await route.abort()
+                return
+            headers = None
+            if header_fn and _should_tag(req.url, req.resource_type, origin):
+                extra = header_fn() or {}
+                if extra:
+                    headers = {**req.headers, **extra}
+            if headers:
+                await route.continue_(headers=headers)
             else:
                 await route.continue_()
 
-        await context.route("**/*", _lite_route)
-        css = LITE_CSS.replace("\n", " ")
-        await context.add_init_script(
-            "(() => { const s = document.createElement('style');"
-            f"s.textContent = {css!r};"
-            "(document.head || document.documentElement).appendChild(s); })();"
-        )
+        if need_route:
+            await context.route("**/*", handler)
+        if self.lite:
+            css = LITE_CSS.replace("\n", " ")
+            await context.add_init_script(
+                "(() => { const s = document.createElement('style');"
+                f"s.textContent = {css!r};"
+                "(document.head || document.documentElement).appendChild(s); })();"
+            )
 
     async def close(self):
         for browser in self._browsers:
@@ -162,3 +180,23 @@ class BrowserPool:
             await self._playwright.stop()
             self._playwright = None
         self.lite = False
+
+
+def _should_tag(url: str, resource_type: str, origin: Optional[str]) -> bool:
+    if resource_type == "document":
+        return True
+    if not origin:
+        return False
+    return url.startswith(origin)
+
+
+def page_origin(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return None
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return None

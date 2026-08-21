@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+import re
 from typing import List, Optional
 
 from argos.reporting.stats import summarize_series
@@ -21,6 +22,9 @@ def classify_error(message: Optional[str]) -> Optional[str]:
     if not message:
         return None
     text = message.lower()
+    match = re.search(r"\bhttp\s+(\d{3})\b", text)
+    if match:
+        return f"HTTP {match.group(1)}"
     if "timeout" in text:
         return "Timeout"
     if "net::" in text or "dns" in text or "err_connection" in text or "ns_error" in text:
@@ -70,6 +74,8 @@ def _finish_steps(groups: dict) -> List[dict]:
             "dom_size_bytes": summarize_series(group["dom_size"]),
             "dom_node_count": summarize_series(group["dom_nodes"]),
             "error_types": dict(group["errors"]),
+            "http_status": dict(group["http"]),
+            "slow_assets": _top_assets(group["assets"], 8),
             "share_pct": 0.0,
             "bottleneck": False,
         })
@@ -168,6 +174,72 @@ def _bucket_width(span_seconds: float, samples: int) -> int:
     return next((width for width in BUCKET_CHOICES if width >= ideal), BUCKET_CHOICES[-1])
 
 
+def _journey_steps(item: dict) -> List[dict]:
+    """Pasos compactos de un journey, para inspeccionar un pico del gráfico."""
+    steps = []
+    for step in item.get("step_results") or []:
+        error = step.get("error_message")
+        steps.append({
+            "step_index": step.get("step_index"),
+            "label": _step_label(step.get("action"), step.get("description")),
+            "action": step.get("action"),
+            "ms": step.get("duration_ms"),
+            "ok": step.get("status") != "FAIL",
+            "error": (error or "")[:180] or None,
+            "http": step.get("http_status"),
+            "resources": (step.get("resources") or [])[:8],
+        })
+    return steps
+
+
+def _window_detail(items: List[dict]) -> dict:
+    """Pasos y journeys más lentos de una ventana de throughput."""
+    groups = defaultdict(_empty_step_group)
+    samples = []
+    for item in items:
+        fail_step = None
+        for step in item.get("steps") or []:
+            group = groups[step.get("step_index", 0)]
+            _record_step(group, {
+                "action": step.get("action"),
+                "description": step.get("label"),
+                "duration_ms": step.get("ms"),
+            })
+            if not step.get("ok"):
+                group["fails"] += 1
+                kind = classify_error(step.get("error")) or "Otro"
+                group["errors"][kind] += 1
+                fail_step = step
+        samples.append({
+            "t": item.get("end") or item.get("t"),
+            "probe_id": item.get("probe_id"),
+            "ms": item.get("ms"),
+            "active": item.get("active"),
+            "ok": bool(item.get("ok")),
+            "fail_step": fail_step,
+        })
+    samples.sort(key=lambda row: row.get("ms") or 0, reverse=True)
+    return {
+        "steps": [
+            {
+                "step_index": step["step_index"],
+                "label": step["label"],
+                "action": step["action"],
+                "runs": step["runs"],
+                "ok": step["ok"],
+                "fail": step["fail"],
+                "p50_ms": step["p50_ms"],
+                "p95_ms": step["p95_ms"],
+                "avg_ms": step["avg_ms"],
+                "error_types": step["error_types"],
+                "bottleneck": step["bottleneck"],
+            }
+            for step in _finish_steps(groups)
+        ],
+        "samples": samples[:8],
+    }
+
+
 def throughput_series(points: List[dict]) -> dict:
     """Journeys terminados por minuto, tasa de error y percentiles por ventana.
 
@@ -198,8 +270,10 @@ def throughput_series(points: List[dict]) -> dict:
         fails = sum(1 for item in items if not item.get("ok"))
         stats = summarize_series(item.get("ms") for item in items) or {}
         active = summarize_series(item.get("active") for item in items) or {}
+        window = _window_detail(items)
         series.append({
             "t": (start + timedelta(seconds=index * width)).isoformat(timespec="seconds"),
+            "until": (start + timedelta(seconds=(index + 1) * width)).isoformat(timespec="seconds"),
             "journeys": len(items),
             "fail": fails,
             "error_rate": round(fails / len(items), 4) if items else 0.0,
@@ -208,6 +282,8 @@ def throughput_series(points: List[dict]) -> dict:
             "p95_ms": (stats.get("percentiles") or {}).get("p95"),
             "p99_ms": (stats.get("percentiles") or {}).get("p99"),
             "active_p95_ms": (active.get("percentiles") or {}).get("p95"),
+            "steps": window["steps"],
+            "samples": window["samples"],
         })
 
     # La corrida casi nunca termina justo al cerrar una ventana. Esa última
@@ -331,7 +407,13 @@ def _empty_step_group() -> dict:
         "dom_nodes": [],
         "fails": 0,
         "errors": Counter(),
+        "http": Counter(),
+        "assets": defaultdict(_empty_asset),
     }
+
+
+def _empty_asset() -> dict:
+    return {"type": "", "durations": [], "bytes": []}
 
 
 def _record_step(group: dict, step: dict) -> None:
@@ -344,6 +426,52 @@ def _record_step(group: dict, step: dict) -> None:
         group["dom_size"].append(dom["size_bytes"])
     if dom.get("node_count") is not None:
         group["dom_nodes"].append(dom["node_count"])
+    status = step.get("http_status")
+    if status is not None:
+        group["http"][str(int(status))] += 1
+    for hit in step.get("resources") or []:
+        url = hit.get("url")
+        if not url:
+            continue
+        bucket = group["assets"][url]
+        bucket["type"] = hit.get("type") or bucket["type"] or "other"
+        if hit.get("duration_ms") is not None:
+            bucket["durations"].append(hit["duration_ms"])
+        bucket["bytes"].append(hit.get("transfer_size") or 0)
+
+
+def _top_assets(buckets: dict, limit: int = 15) -> List[dict]:
+    rows = []
+    for url, data in buckets.items():
+        stats = summarize_series(data.get("durations") or [])
+        if not stats:
+            continue
+        sizes = data.get("bytes") or []
+        rows.append({
+            "url": url,
+            "type": data.get("type") or "other",
+            "hits": stats.get("count") or len(data["durations"]),
+            "avg_ms": stats.get("avg"),
+            "p95_ms": (stats.get("percentiles") or {}).get("p95"),
+            "max_ms": stats.get("max"),
+            "bytes": int(sum(sizes) / len(sizes)) if sizes else 0,
+        })
+    rows.sort(key=lambda row: row.get("p95_ms") or row.get("avg_ms") or 0, reverse=True)
+    return rows[:limit]
+
+
+def _http_counts(counter: Counter) -> tuple:
+    five = four = 0
+    for code, count in counter.items():
+        try:
+            status = int(code)
+        except (TypeError, ValueError):
+            continue
+        if status >= 500:
+            five += count
+        elif status >= 400:
+            four += count
+    return dict(counter), five, four
 
 
 def _downsample(points: List[dict], limit: int = TIMELINE_POINTS) -> List[dict]:
@@ -573,6 +701,9 @@ def analyze_run(detail: dict) -> dict:
                     "active": active,
                     "ok": bool(item.get("success")),
                     "probe_id": block["probe_id"],
+                    "error": (item.get("error") or "")[:180] or None,
+                    "steps": _journey_steps(item),
+                    "dataset": item.get("dataset") or None,
                 }
                 timeline.append(point)
                 slowest.append(point)
@@ -605,6 +736,16 @@ def analyze_run(detail: dict) -> dict:
 
     journeys = ok + fail
     step_stats = _finish_steps(steps)
+    http_status = Counter()
+    all_assets = defaultdict(_empty_asset)
+    for group in steps.values():
+        http_status.update(group["http"])
+        for url, data in group["assets"].items():
+            bucket = all_assets[url]
+            bucket["type"] = data.get("type") or bucket["type"]
+            bucket["durations"].extend(data.get("durations") or [])
+            bucket["bytes"].extend(data.get("bytes") or [])
+    http_codes, http_5xx, http_4xx = _http_counts(http_status)
     timeline.sort(key=lambda point: point["t"] or "")
     slowest.sort(key=lambda point: point["ms"], reverse=True)
     failed_shots = [shot for shot in screenshots if shot.get("error")]
@@ -654,6 +795,10 @@ def analyze_run(detail: dict) -> dict:
         "throughput": throughput_series(timeline),
         "waterfall": journey_waterfall(step_stats),
         "error_types": dict(error_types),
+        "http_status": http_codes,
+        "http_5xx": http_5xx,
+        "http_4xx": http_4xx,
+        "slow_assets": _top_assets(all_assets, 15),
         "screenshots": screenshots[:MAX_EVIDENCE],
         "failed_screenshots": failed_shots[:MAX_EVIDENCE],
         "error_gallery": _group_by_error(failed_shots),

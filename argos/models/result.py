@@ -24,6 +24,14 @@ class WebVitals(BaseModel):
     cls: Optional[float] = None
 
 
+class ResourceHit(BaseModel):
+    """Un recurso de red de un open_url, recortado para no inflar el ingest."""
+    url: str
+    type: str
+    duration_ms: float
+    transfer_size: int = 0
+
+
 class StepResult(BaseModel):
     step_index: int
     action: str
@@ -32,12 +40,12 @@ class StepResult(BaseModel):
     start_time: float
     duration_ms: float
     error_message: Optional[str] = None
-    # "error", "slow" o "reference": distingue la captura de un fallo de la del
-    # recorrido de referencia, que se ve igual pero significa lo contrario.
     capture_reason: Optional[str] = None
     screenshot_path: Optional[str] = None
     dom_snapshot_path: Optional[str] = None
     dom: Optional[DomMetrics] = None
+    http_status: Optional[int] = None
+    resources: Optional[List[ResourceHit]] = None
 
 
 class FlowResult(BaseModel):

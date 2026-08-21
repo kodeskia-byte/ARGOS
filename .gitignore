@@ -15,5 +15,8 @@ data/
 # Resultados locales de las corridas (pantallazos, DOM, métricas)
 results/
 
+# Lista real de servidores (el ejemplo sí se versiona)
+deploy/hosts.txt
+
 # Logs
 *.log

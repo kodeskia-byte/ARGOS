@@ -1,0 +1,6 @@
+# Una línea por generador de carga.
+#   user@host [instance-id]
+# Si no pones instance-id, fleet.sh usa gen-01, gen-02, ...
+#
+# root@10.0.0.11
+# root@10.0.0.12 gen-02

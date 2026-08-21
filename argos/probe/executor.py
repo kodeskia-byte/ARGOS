@@ -9,8 +9,8 @@ from typing import Optional
 from playwright.async_api import BrowserContext, Page
 
 from argos.models.flow import Flow, Step, ActionType
-from argos.models.result import DomMetrics, FlowResult, NavTimings, StepResult, WebVitals
-from argos.probe.browser import BrowserPool
+from argos.models.result import DomMetrics, FlowResult, NavTimings, ResourceHit, StepResult, WebVitals
+from argos.probe.browser import BrowserPool, page_origin
 
 # Se inyecta en cada navegación para que LCP/CLS sobrevivan al cambio de
 # página. Sin este script, performance.getEntries() a fin del journey solo
@@ -35,6 +35,29 @@ try {
 } catch (err) {}
 """
 
+RESOURCE_SCRIPT = """() => {
+  const short = (u) => {
+    try {
+      const url = new URL(u);
+      let path = url.origin + url.pathname;
+      if (path.length > 140) path = path.slice(0, 70) + '…' + path.slice(-60);
+      return path;
+    } catch (err) {
+      return String(u || '').slice(0, 140);
+    }
+  };
+  return (performance.getEntriesByType('resource') || [])
+    .map((e) => ({
+      url: short(e.name),
+      type: e.initiatorType || 'other',
+      duration_ms: Math.round(e.duration * 10) / 10,
+      transfer_size: e.transferSize || 0,
+    }))
+    .filter((e) => e.duration_ms > 0)
+    .sort((a, b) => b.duration_ms - a.duration_ms)
+    .slice(0, 10);
+}"""
+
 # Tope de capturas de pasos lentos por sonda. Cada imagen viaja en base64 al
 # colector, así que sin límite una corrida degradada satura la red antes que el
 # sitio bajo prueba.
@@ -48,13 +71,17 @@ CONTEXT_RECYCLE_EVERY = 20
 class FlowExecutor:
     def __init__(self, probe_id: str, output_dir: str, pool: BrowserPool,
                  probe_index: int = 0, reference: bool = False,
-                 slow_step_ms: float = 0, lite: bool = False):
+                 slow_step_ms: float = 0, lite: bool = False,
+                 run_id: str = "", instance_id: str = ""):
         self.probe_id = probe_id
         self.output_dir = output_dir
         self.pool = pool
         self.probe_index = probe_index
         self.slow_step_ms = slow_step_ms
         self.lite = lite
+        self.run_id = run_id
+        self.instance_id = instance_id
+        self.origin = None
         self._reference_pending = reference
         self._slow_shots = 0
         self._context: Optional[BrowserContext] = None
@@ -79,6 +106,11 @@ class FlowExecutor:
         return screenshot_file, dom_file
 
     async def execute(self, flow: Flow) -> FlowResult:
+        self.origin = next(
+            (page_origin(step.value) for step in flow.steps
+             if step.action == ActionType.OPEN_URL and step.value),
+            self.origin,
+        )
         _, page = await self._session()
 
         step_results = []
@@ -96,9 +128,16 @@ class FlowExecutor:
                 screenshot_file = None
                 dom_file = None
                 reason = None
+                http_status = None
+                resources = None
 
                 try:
-                    await self._execute_step(page, step)
+                    outcome = await self._execute_step(page, step)
+                    if isinstance(outcome, dict):
+                        http_status = outcome.get("http_status")
+                        resources = outcome.get("resources")
+                    if http_status is not None and http_status >= 400:
+                        raise RuntimeError(f"HTTP {http_status} {step.value or ''}")
                     if step.action == ActionType.OPEN_URL:
                         await self._merge_vitals(page, vitals)
                 except Exception as e:
@@ -141,6 +180,8 @@ class FlowExecutor:
                     screenshot_path=screenshot_file,
                     dom_snapshot_path=dom_file,
                     dom=None if crashed else await self._capture_dom_metrics(page),
+                    http_status=http_status,
+                    resources=resources,
                 )
                 step_results.append(result)
 
@@ -203,7 +244,11 @@ class FlowExecutor:
                 await self.close()
 
         browser = self.pool.browser_for(self.probe_index)
-        context = await self.pool.new_context(browser)
+        context = await self.pool.new_context(
+            browser,
+            header_fn=self._argos_headers,
+            origin=self.origin,
+        )
         await context.add_init_script(VITALS_SCRIPT)
         page = await context.new_page()
         self._context = context
@@ -218,6 +263,16 @@ class FlowExecutor:
             await context.close()
         except Exception:
             pass
+
+    def _argos_headers(self) -> dict:
+        headers = {
+            "X-Argos-Run": self.run_id or "",
+            "X-Argos-Probe": self.probe_id,
+            "X-Argos-VU": str(self.probe_index + 1),
+        }
+        if self.instance_id:
+            headers["X-Argos-Instance"] = self.instance_id
+        return {key: value for key, value in headers.items() if value}
 
     async def _merge_vitals(self, page, vitals: dict) -> None:
         """Acumula LCP/FCP/CLS de la navegación actual.
@@ -288,7 +343,12 @@ class FlowExecutor:
 
     async def _execute_step(self, page, step: Step):
         if step.action == ActionType.OPEN_URL:
-            await page.goto(step.value, timeout=step.timeout, wait_until="domcontentloaded")
+            response = await page.goto(
+                step.value, timeout=step.timeout, wait_until="domcontentloaded",
+            )
+            status = response.status if response is not None else None
+            resources = await self._capture_resources(page)
+            return {"http_status": status, "resources": resources}
 
         elif step.action == ActionType.CLICK:
             await page.click(self._playwright_selector(step), timeout=step.timeout)
@@ -305,6 +365,26 @@ class FlowExecutor:
 
         elif step.action == ActionType.WAIT:
             await asyncio.sleep(self._think_time(step))
+        return None
+
+    @staticmethod
+    async def _capture_resources(page) -> Optional[list]:
+        try:
+            raw = await page.evaluate(RESOURCE_SCRIPT)
+        except Exception:
+            return None
+        hits = []
+        for item in raw or []:
+            try:
+                hits.append(ResourceHit(
+                    url=str(item.get("url") or "")[:160],
+                    type=str(item.get("type") or "other")[:32],
+                    duration_ms=float(item.get("duration_ms") or 0),
+                    transfer_size=int(item.get("transfer_size") or 0),
+                ))
+            except Exception:
+                continue
+        return hits or None
 
     @staticmethod
     def _think_time(step: Step) -> float:

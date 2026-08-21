@@ -253,7 +253,19 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
                              (~25 sondas lite o ~12 full por proceso).
     --full                   Fuerza Chromium completo (usuario real) aunque
                              haya muchas sondas. Más CPU y RAM.
-    --duration TIEMPO        Cuánto dura. Formato: 30s, 5m, 1h. Default 10s.
+    --duration TIEMPO        Cuánto dura si no hay --ramp. 30s, 5m, 1h.
+    --ramp LISTA             Rampa en UNA corrida: 10@2m,50@5m,100@5m
+                             Sube los usuarios por tramo. Ignora --users y
+                             --duration (el máximo y la suma salen de la lista).
+    --abort-error 0.4        Corta la corrida si la tasa de error llega a 40%.
+                             También se puede poner en el YAML (sla.abort_error_rate).
+    --abort-cpu 90           Corta si la CPU del GENERADOR llega a 90% unos
+                             segundos. Evita publicar un p95 de una máquina ahogada.
+    --abort-grace 60         Segundos de gracia antes de poder abortar. Default 60.
+    --data CSV               Dataset: una fila por usuario. Sustituye {{campo}}
+                             en value, xpath, selector y description del YAML.
+    --run-id ID              Id compartido de la corrida. Default: run_YYYYMMDD_HHMMSS.
+                             Lo usa fleet.sh para que 10 servidores sean UNA carga.
     --output DIR             Dónde guardar. Default: results
     --headed                 Muestra la ventana del navegador. Solo para
                              depurar y solo si tienes entorno gráfico.
@@ -273,6 +285,64 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
                              no representan a un usuario real; úsalo para
                              rampa de capacidad, no para el informe al cliente.
                              Se activa solo con --users 40 o más, salvo --full.
+
+Sobre --ramp: es el escalón de capacidad que antes hacías a mano con cuatro
+corridas. Una sola invocación sube 10 → 50 → 100 usuarios y el collector ve
+el objetivo actual en cada heartbeat. El p95 de cada tramo queda en los
+journeys (campo vu_target).
+
+Sobre el bloque sla del YAML (opcional):
+
+    sla:
+      error_rate: 0.01          # máximo al terminar (1%)
+      p95_active_ms: 4000       # p95 del tiempo activo, sin think time
+      apdex: 0.85
+      abort_error_rate: 0.40    # cortar a mitad
+      abort_cpu_percent: 90
+      abort_grace_s: 60
+
+Al terminar imprime SLA PASS o SLA FAIL y sale con código 1 si falló el
+umbral, 2 si abortó a mitad. Sin bloque sla, el código de salida es 0
+salvo abort.
+
+Sobre correlación con el access.log del sitio (Sprint 2): cada navegación
+first-party lleva headers:
+
+    X-Argos-Run: run_YYYYMMDD_HHMMSS
+    X-Argos-Probe: probe-01
+    X-Argos-VU: 1
+    X-Argos-Instance: gen-01
+
+No se etiquetan requests a terceros (analytics, CDN ajeno) para no
+disparar CORS. En nginx:
+
+    log_format argos '$remote_addr $status $http_x_argos_run '
+                     '$http_x_argos_probe $request';
+
+El FAIL de un open_url ahora distingue HTTP 502 de un timeout de
+Playwright o de un selector que no apareció. El informe cuenta 4xx/5xx
+del documento y lista los JS/CSS/XHR más lentos hasta DOMContentLoaded
+(no es un HAR completo: top 10 por navegación).
+
+Sobre --data y {{campo}}: 100 sondas con el mismo YAML son un bot. Un login
+o un SKU se parametrizan así:
+
+    - action: input
+      selector: "#user"
+      value: "{{usuario}}"
+    - action: input
+      selector: "#pass"
+      value: "{{clave}}"
+    - action: open_url
+      value: "https://tienda.ejemplo/p/{{sku}}"
+
+    ./venv/bin/python runner.py --flow flows/login.yaml \
+        --data flows/data.example.csv --users 10 --duration 2m \
+        --controller-url http://127.0.0.1:8080 --instance-id gen-01
+
+Cada sonda toma una fila distinta (offset + iteración). Si hay más sondas
+que filas, se reciclan. Las columnas cuyo nombre contiene pass, clave,
+secret, token o pwd no se mandan al collector.
 
 Sobre --browsers: ARGOS ya no abre un Chromium por sonda. Con --users 100
 y --lite usa 4 procesos (~25 contexts cada uno). Sube --browsers si ves
@@ -313,12 +383,15 @@ QUÉ DEJA EN DISCO
 
 El run_id se arma con la fecha y hora de inicio en la máquina que lo lanzó.
 Cada servidor genera el suyo, así que 10 servidores producen 10 run_id
-distintos aunque arranquen a la vez.
+distintos aunque arranquen a la vez, SALVO que uses --run-id (o fleet.sh,
+que lo pasa solo). Con el mismo run_id el dashboard los junta como una
+carga aunque el reloj de cada máquina no coincida al segundo.
 
 VARIABLES DE ENTORNO
 
     ARGOS_CONTROLLER_URL     Equivale a --controller-url
     ARGOS_INSTANCE_ID        Equivale a --instance-id
+    ARGOS_RUN_ID             Equivale a --run-id
     ARGOS_TOKEN              Token compartido. Si está definido en el runner Y
                              en el collector, los envíos van autenticados. Si
                              está en el collector y no en el runner, el
@@ -624,6 +697,14 @@ PARA ENTREGARLE AL CLIENTE
               más lindo porque incluye los gráficos en color y los pantallazos.
 
 
+REFERENCIA (BASELINE)
+
+En Ejecuciones, "Usar como referencia" marca una carga buena (el escalón
+que el sitio aguantó, o una corrida de calibración). La siguiente corrida
+del mismo flujo muestra el delta del p95 activo: +18% es que el sitio
+ya no responde igual. El PDF también lo narra. "Quitar referencia" limpia
+la marca.
+
 COMPARAR CORRIDAS Y CONSOLIDAR GENERADORES
 
 En la pestaña "Ejecuciones" cada corrida tiene una casilla arriba a la
@@ -649,6 +730,8 @@ que resuelve dos necesidades distintas con el mismo mecanismo:
         Por qué importa: cada generador reporta su propio run_id y por separado
         solo ve su porción de la carga. El p95 real de la prueba no es el
         promedio de los diez p95, y esta vista es la única que lo calcula bien.
+        Con fleet.sh el run_id es el mismo: el botón "Informe consolidado" de
+        esa carga ya abre el conjunto.
 
 También funciona directo por URL, útil para automatizar:
 
@@ -819,42 +902,27 @@ de seguir.
 
 PASO 4 - LA PRUEBA REAL, ARRANCANDO TODOS A LA MISMA HORA
 
-Este es el punto delicado. Si lanzas los ssh en un bucle, los servidores
-arrancan con varios segundos de diferencia y la rampa de carga te queda
-escalonada. Para una prueba de estrés seria necesitas que los 10 empiecen
-juntos.
+Copiá deploy/hosts.example.txt a deploy/hosts.txt (una línea user@ip por
+generador). fleet.sh hace el pull, mira el desfase NTP, comparte UN run_id
+y lanza el mismo --ramp en todos:
 
-La forma más simple y confiable: acordar una hora de reloj y que cada servidor
-espere hasta esa hora. Los servidores tienen la hora sincronizada por NTP, así
-que esto es preciso al segundo.
+    export ARGOS_CONTROLLER_URL=http://IP_COLLECTOR:8080
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --check
 
-    # Define la hora de inicio (formato HH:MM:SS, hora del servidor, en UTC
-    # si tus servidores están en UTC). Dale unos 3 minutos de margen.
-    INICIO="18:30:00"
-    COLLECTOR="http://IP_COLLECTOR:8080"
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --lite \
+        --ramp 10@2m,50@5m,100@5m \
+        --flow flows/example.yaml \
+        --at 18:30:00
 
-    i=1
-    for ip in $(cat servidores.txt); do
-        gen=$(printf "gen-%02d" $i)
-        ssh root@$ip "cd ARGOS && nohup bash -c '
-            while [ \$(date +%H:%M:%S) \< \"$INICIO\" ]; do sleep 0.2; done
-            ./venv/bin/python runner.py \
-                --users 20 --duration 30m \
-                --flow flows/example.yaml \
-                --controller-url $COLLECTOR \
-                --instance-id $gen
-        ' > carga.log 2>&1 &" &
-        i=$((i+1))
-    done
-    wait
-    echo "Los 10 generadores esperan el arranque a las $INICIO"
+--at usa el reloj de CADA servidor (NTP). Dale 2-3 minutos de margen.
+Sin --at arrancan en cuanto el ssh termina, en paralelo.
 
-Con 20 sondas por servidor y 10 servidores tienes 200 usuarios concurrentes
-sostenidos durante 30 minutos.
+Con --data users.csv copia el CSV a cada máquina. Para cortar:
 
-Verifica la hora de los servidores antes, con:
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --stop
 
-    for ip in $(cat servidores.txt); do ssh root@$ip date; done
+El run_id compartido hace que el dashboard vea UNA carga aunque los
+hostnames no coincidan. 20 sondas × 10 servidores = 200 usuarios.
 
 PASO 5 - MIRAR LA PRUEBA MIENTRAS CORRE
 
@@ -873,10 +941,7 @@ Lo que tienes que vigilar, en este orden:
 
 Si necesitas cortar todo de emergencia:
 
-    for ip in $(cat servidores.txt); do
-        ssh root@$ip "pkill -f runner.py" &
-    done
-    wait
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --stop
 
 PASO 6 - RECOGER LOS RESULTADOS
 

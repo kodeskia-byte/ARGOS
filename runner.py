@@ -4,17 +4,21 @@ import yaml
 import json
 import time
 import os
+import re
+import sys
 import socket
 import threading
 import traceback
-import re
 from datetime import datetime, timedelta, timezone
 from queue import Queue
 
 from argos.models.flow import Flow
+from argos.dataset import apply_row, load_csv, missing_columns, placeholders, row_for, strip_secrets
 from argos.probe.browser import BrowserPool, default_browsers
 from argos.probe.executor import FlowExecutor
-from argos.reporting import build_summary, format_summary, save_summary
+from argos.probe.resources import ResourceSampler
+from argos.reporting import build_summary, format_summary, save_summary, evaluate_sla, format_sla
+from argos.load import LoadControl, Stage, parse_duration, parse_ramp
 from argos.controller.client import (
     LiveAggregator,
     controller_token,
@@ -27,26 +31,12 @@ from argos.controller.client import (
 AUTO_LITE_USERS = 40
 
 
-def parse_duration(duration_str: str) -> int:
-    """Parses duration string (e.g. '1m', '30s', '1h') to seconds."""
-    match = re.match(r"(\d+)([smh])", duration_str)
-    if not match:
-        raise ValueError("Invalid duration format. Use '30s', '5m', '1h'.")
-    value, unit = match.groups()
-    value = int(value)
-    if unit == 's': return value
-    if unit == 'm': return value * 60
-    if unit == 'h': return value * 3600
-    return value
-
-
-async def run_probe(args, pool: BrowserPool, result_queue: Queue) -> list:
+async def run_probe(args, pool: BrowserPool, result_queue: Queue,
+                    control: LoadControl) -> list:
     """Una sonda: reutiliza un context del Chromium compartido."""
     (probe_id, probe_index, flow_data, duration_sec, output_dir,
-     reference, slow_step_ms, lite) = args
+     reference, slow_step_ms, lite, run_id, instance_id, dataset) = args
 
-    # Arranque escalonado para no abrir 100 contexts ni golpear el sitio
-    # en el mismo milisegundo.
     await asyncio.sleep(min(probe_index * 0.02, 3.0))
 
     flow = Flow(**flow_data)
@@ -58,18 +48,35 @@ async def run_probe(args, pool: BrowserPool, result_queue: Queue) -> list:
         reference=reference,
         slow_step_ms=slow_step_ms,
         lite=lite,
+        run_id=run_id,
+        instance_id=instance_id,
     )
 
     results = []
     end_time = datetime.now() + timedelta(seconds=duration_sec)
-
     print(f"[{probe_id}] Started. Running for {duration_sec}s...")
 
     iteration = 0
     try:
-        while iteration == 0 or datetime.now() < end_time:
-            res = await executor.execute(flow)
+        while True:
+            if control.aborted:
+                break
+            if datetime.now() >= end_time:
+                break
+            if probe_index >= control.target_users:
+                await asyncio.sleep(0.4)
+                continue
+            current = flow
+            row = None
+            if dataset:
+                row = row_for(dataset, probe_index, iteration)
+                current = Flow(**apply_row(flow_data, row))
+            res = await executor.execute(current)
             payload = res.model_dump()
+            payload["vu_target"] = control.target_users
+            payload["stage"] = control.stage_index
+            if row:
+                payload["dataset"] = strip_secrets(row)
             results.append(payload)
             result_queue.put(payload)
             iteration += 1
@@ -80,8 +87,62 @@ async def run_probe(args, pool: BrowserPool, result_queue: Queue) -> list:
     return results
 
 
+async def drive_ramp(control: LoadControl, aggregator: LiveAggregator,
+                     base_payload: dict) -> None:
+    """Avanza los tramos de rampa y corta si el error o la CPU se disparan."""
+    sampler = ResourceSampler()
+    sampler.sample()
+    cpu_strikes = 0
+    for index, stage in enumerate(control.stages):
+        if control.aborted:
+            return
+        control.stage_index = index
+        control.target_users = stage.users
+        base_payload["users"] = stage.users
+        base_payload["stage"] = index
+        print(f"[argos] rampa: {stage.label()}")
+        deadline = time.time() + stage.duration_s
+        while time.time() < deadline:
+            if control.aborted:
+                return
+            await asyncio.sleep(2)
+            sample = sampler.sample()
+            snap = aggregator.snapshot()
+            elapsed = time.time() - control.started_at
+            if elapsed < control.abort_grace_s:
+                continue
+            if (control.abort_error_rate is not None
+                    and snap["iterations"] >= 8
+                    and snap["error_rate"] >= control.abort_error_rate):
+                reason = (
+                    f"abort: error_rate {snap['error_rate']:.0%} "
+                    f"≥ {control.abort_error_rate:.0%}"
+                )
+                control.abort(reason)
+                print(f"[argos] {reason}")
+                return
+            cpu = sample.get("cpu_percent")
+            if (control.abort_cpu_percent is not None
+                    and cpu is not None
+                    and cpu >= control.abort_cpu_percent):
+                cpu_strikes += 1
+            else:
+                cpu_strikes = 0
+            if cpu_strikes >= 3:
+                reason = (
+                    f"abort: CPU generador {cpu:.0f}% "
+                    f"≥ {control.abort_cpu_percent:.0f}%"
+                )
+                control.abort(reason)
+                print(f"[argos] {reason}")
+                return
+    if not control.stop_reason:
+        control.stop_reason = "completed"
+
+
 async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
-                   browsers, slow_shot, no_reference, result_queue) -> list:
+                   browsers, slow_shot, no_reference, result_queue, control,
+                   aggregator, base_payload, dataset):
     pool = BrowserPool()
     pages_per_browser = max(1, (users + browsers - 1) // browsers)
     await pool.start(
@@ -94,19 +155,23 @@ async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
           f"~{pages_per_browser} contexts c/u, "
           f"renderer-limit={pool.renderer_cap}")
 
-    tasks = []
-    for i in range(users):
-        probe_id = f"probe-{i+1:02d}"
-        # Solo la primera sonda arma el recorrido de referencia: con 100 usuarios
-        # serían 100 copias idénticas del mismo flujo correcto.
-        args = (
-            probe_id, i, flow_data, duration_sec, run_output_dir,
-            i == 0 and not no_reference, slow_shot, lite,
-        )
-        tasks.append(asyncio.create_task(run_probe(args, pool, result_queue)))
-
+    tasks = [
+        asyncio.create_task(run_probe(
+            (
+                f"probe-{i+1:02d}", i, flow_data, duration_sec, run_output_dir,
+                i == 0 and not no_reference, slow_shot, lite,
+                base_payload.get("run_id") or "",
+                base_payload.get("instance_id") or "",
+                dataset,
+            ),
+            pool, result_queue, control,
+        ))
+        for i in range(users)
+    ]
+    driver = asyncio.create_task(drive_ramp(control, aggregator, base_payload))
     total_results = []
     try:
+        await driver
         nested = await asyncio.gather(*tasks, return_exceptions=True)
         for i, item in enumerate(nested):
             if isinstance(item, Exception):
@@ -115,13 +180,17 @@ async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
                 continue
             total_results.extend(item)
     finally:
+        if not driver.done():
+            driver.cancel()
         await pool.close()
     return total_results
 
 
 @click.command()
-@click.option('--users', default=1, help='Number of concurrent users (probes)')
-@click.option('--duration', default='10s', help='Duration of test (e.g. 30s, 5m)')
+@click.option('--users', default=1, help='Usuarios virtuales si no hay --ramp')
+@click.option('--duration', default='10s', help='Duración si no hay --ramp (30s, 5m, 1h)')
+@click.option('--ramp', default=None,
+              help='Rampa en una corrida, ej. 10@2m,50@5m,100@5m')
 @click.option('--flow', required=True, help='Path to flow YAML file')
 @click.option('--output', default='results', help='Directory to save results')
 @click.option('--headed', is_flag=True, help='Show browser window (debug)')
@@ -139,11 +208,36 @@ async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
               help='Forzar Chromium completo (usuario real), aunque haya muchas sondas')
 @click.option('--browsers', default=0, type=int,
               help='Procesos Chromium compartidos. 0 = automático')
-def main(users, duration, flow, output, headed, controller_url, instance_id,
-         slow_shot, no_reference, lite, full, browsers):
+@click.option('--abort-error', default=None, type=float,
+              help='Cortar si la tasa de error alcanza este valor (0.4 = 40%)')
+@click.option('--abort-cpu', default=None, type=float,
+              help='Cortar si la CPU del generador alcanza este porcentaje')
+@click.option('--abort-grace', default=None, type=float,
+              help='Segundos de gracia antes de poder abortar (default 60)')
+@click.option('--data', default=None, type=click.Path(exists=True, dir_okay=False),
+              help='CSV con una fila por usuario. Sustituye {{campo}} en el YAML')
+@click.option('--run-id', default=None, envvar='ARGOS_RUN_ID',
+              help='Id de corrida compartido (flota). Default: run_YYYYMMDD_HHMMSS')
+def main(users, duration, ramp, flow, output, headed, controller_url, instance_id,
+         slow_shot, no_reference, lite, full, browsers,
+         abort_error, abort_cpu, abort_grace, data, run_id):
     """ARGOS .IA Stress Test Runner"""
     if full and lite:
         raise click.UsageError("usa --lite o --full, no ambos")
+
+    if ramp:
+        try:
+            stages = parse_ramp(ramp)
+        except ValueError as exc:
+            raise click.UsageError(str(exc))
+        users = max(stage.users for stage in stages)
+        duration_sec = sum(stage.duration_s for stage in stages)
+    else:
+        try:
+            duration_sec = parse_duration(duration)
+        except ValueError as exc:
+            raise click.UsageError(str(exc))
+        stages = [Stage(users=users, duration_s=duration_sec)]
 
     auto_lite = False
     if not full and not lite and users >= AUTO_LITE_USERS:
@@ -158,8 +252,10 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
 
     instance_id = instance_id or socket.gethostname()
     print(f"=== ARGOS .IA Stress Test ===")
-    print(f"Users: {users}")
-    print(f"Duration: {duration}")
+    print(f"Users: {users}" + (" (máximo de la rampa)" if ramp else ""))
+    print(f"Duration: {duration_sec}s")
+    if ramp:
+        print(f"Ramp: {ramp}")
     print(f"Flow: {flow}")
     print(f"Output: {output}")
     print(f"Headless: {not headed}")
@@ -177,30 +273,62 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     if controller_url:
         print(f"Controller: {controller_url}")
 
-    try:
-        duration_sec = parse_duration(duration)
-    except ValueError as e:
-        print(f"Error: {e}")
-        return
-
     if not os.path.exists(flow):
         print(f"Error: Flow file not found: {flow}")
-        return
+        sys.exit(1)
 
-    with open(flow, 'r') as f:
-        flow_data = yaml.safe_load(f)
+    with open(flow, 'r') as handle:
+        flow_data = yaml.safe_load(handle)
 
     try:
         flow_obj = Flow(**flow_data)
-    except Exception as e:
-        print(f"Error validating flow: {e}")
-        return
+    except Exception as exc:
+        print(f"Error validating flow: {exc}")
+        sys.exit(1)
+
+    needed = placeholders(flow_data)
+    dataset = []
+    if data:
+        try:
+            dataset = load_csv(data)
+        except (OSError, ValueError) as exc:
+            print(f"Error leyendo CSV: {exc}")
+            sys.exit(1)
+        missing = missing_columns(needed, dataset)
+        if missing:
+            print("Error: el CSV no tiene las columnas que pide el YAML: "
+                  + ", ".join(missing))
+            sys.exit(1)
+        print(f"Dataset: {data} ({len(dataset)} filas"
+              + (f", se reciclan para {users} sondas" if users > len(dataset) else "")
+              + ")")
+    elif needed:
+        print("Error: el YAML usa {{" + "}}, {{".join(sorted(needed)) + "}} y falta --data")
+        sys.exit(1)
+
+    sla = flow_obj.sla
+    abort_error_rate = abort_error if abort_error is not None else (
+        sla.abort_error_rate if sla else None)
+    abort_cpu_percent = abort_cpu if abort_cpu is not None else (
+        sla.abort_cpu_percent if sla else None)
+    grace = abort_grace if abort_grace is not None else (
+        sla.abort_grace_s if sla else 60)
+    if abort_error_rate is not None:
+        print(f"Abort error_rate ≥ {abort_error_rate:.0%}")
+    if abort_cpu_percent is not None:
+        print(f"Abort CPU generador ≥ {abort_cpu_percent:.0f}%")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_id = f"run_{timestamp}"
+    if run_id:
+        if not re.match(r"^[\w.\-]+$", run_id):
+            print("Error: --run-id solo admite letras, números, _ . -")
+            sys.exit(1)
+    else:
+        run_id = f"run_{timestamp}"
     run_output_dir = os.path.join(output, run_id)
     os.makedirs(run_output_dir, exist_ok=True)
     started_at = datetime.now(timezone.utc).isoformat()
+    print(f"Run: {run_id}  (X-Argos-Run / X-Argos-Probe / X-Argos-VU en el access.log)")
 
     result_queue = Queue()
     aggregator = LiveAggregator()
@@ -209,10 +337,18 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     base_payload = {
         "instance_id": instance_id,
         "run_id": run_id,
-        "users": users,
+        "users": stages[0].users,
         "flow": flow_obj.name,
         "started_at": started_at,
+        "ramp": ramp,
     }
+    control = LoadControl(
+        stages=stages,
+        abort_error_rate=abort_error_rate,
+        abort_cpu_percent=abort_cpu_percent,
+        abort_grace_s=grace or 60,
+        target_users=stages[0].users,
+    )
     reporter = threading.Thread(
         target=reporter_loop,
         args=(result_queue, aggregator, base_payload, controller_url or "", token, stop_event),
@@ -225,7 +361,8 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     try:
         total_results = asyncio.run(run_load(
             users, duration_sec, flow_data, run_output_dir, headed, lite,
-            browsers, slow_shot, no_reference, result_queue,
+            browsers, slow_shot, no_reference, result_queue, control,
+            aggregator, base_payload, dataset,
         ))
     finally:
         stop_event.set()
@@ -234,10 +371,15 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
     total_duration = time.time() - start_time
 
     report_file = os.path.join(run_output_dir, "consolidated_metrics.json")
-    with open(report_file, 'w') as f:
-        json.dump(total_results, f, indent=2)
+    with open(report_file, 'w') as handle:
+        json.dump(total_results, handle, indent=2)
 
     summary = build_summary(total_results)
+    if control.aborted:
+        summary["aborted"] = True
+        summary["abort_reason"] = control.stop_reason
+    verdict = evaluate_sla(total_results, sla)
+    summary["sla"] = verdict
     summary_file = save_summary(summary, run_output_dir)
 
     if controller_url:
@@ -251,16 +393,28 @@ def main(users, duration, flow, output, headed, controller_url, instance_id,
                 "started_at": started_at,
                 "ended_at": datetime.now(timezone.utc).isoformat(),
                 "summary": summary,
+                "aborted": control.aborted,
+                "abort_reason": control.stop_reason,
             },
             token=token,
         )
 
     print(f"\nTest Completed in {total_duration:.2f}s")
+    if control.aborted:
+        print(f"ABORTED: {control.stop_reason}")
     print(f"Total Iterations: {len(total_results)}")
     print(f"Results saved to: {run_output_dir}")
     print(f"Summary saved to: {summary_file}")
     print()
     print(format_summary(summary))
+    sla_text = format_sla(verdict)
+    if sla_text:
+        print(sla_text)
+
+    if control.aborted:
+        sys.exit(2)
+    if verdict.get("defined") and not verdict.get("passed"):
+        sys.exit(1)
 
 
 if __name__ == '__main__':

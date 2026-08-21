@@ -54,6 +54,20 @@ def _collect_step_groups(results: List[dict]) -> Dict[int, dict]:
     return groups
 
 
+def _active_ms(result: dict) -> Optional[float]:
+    """Tiempo activo de un journey: todo lo que no es un paso wait."""
+    total = 0.0
+    seen = False
+    for step in result.get("step_results") or []:
+        duration = step.get("duration_ms")
+        if duration is None:
+            continue
+        seen = True
+        if step.get("action") != "wait":
+            total += duration
+    return total if seen else None
+
+
 def build_summary(results: List[dict]) -> dict:
     total = len(results)
     successes = sum(1 for r in results if r.get("success"))
@@ -115,6 +129,7 @@ def build_summary(results: List[dict]) -> dict:
         "failures": failures,
         "success_rate": round(successes / total, 4) if total else 0,
         "flow_duration_ms": summarize_series(r.get("total_duration_ms") for r in results),
+        "active_ms": summarize_series(_active_ms(result) for result in results),
         "steps": steps,
         "navigation_ms": {field: summarize_series(values) for field, values in nav_series.items()},
         "final_dom": {

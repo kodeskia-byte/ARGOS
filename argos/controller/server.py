@@ -156,7 +156,11 @@ def make_handler(store: Store):
                     "dates": store.list_dates(),
                     "date": date,
                     "items": store.list_runs(date),
+                    "baselines": store.list_baselines(),
                 })
+                return
+            if path == "/api/baseline":
+                self._json(200, {"baselines": store.list_baselines()})
                 return
             if path == "/api/resources":
                 instance_id = (query.get("instance") or [None])[0]
@@ -182,13 +186,19 @@ def make_handler(store: Store):
             self._json(404, {"error": "not found"})
 
         def do_POST(self):
-            if not self._check_token():
-                return
             parsed = urlparse(self.path)
+            if parsed.path.startswith("/ingest/") and not self._check_token():
+                return
             try:
                 payload = self._read_json()
             except json.JSONDecodeError:
                 self._json(400, {"error": "invalid json"})
+                return
+            if parsed.path == "/api/baseline":
+                try:
+                    self._json(200, store.set_baseline(payload))
+                except ValueError as exc:
+                    self._json(400, {"error": str(exc)})
                 return
             if parsed.path == "/ingest/heartbeat":
                 store.save_heartbeat(payload)

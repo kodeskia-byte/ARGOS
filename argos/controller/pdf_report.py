@@ -54,6 +54,20 @@ def _count(value: Optional[float]) -> str:
     return "—" if value is None else f"{value:,.0f}".replace(",", ".")
 
 
+def _http_is_error(code) -> bool:
+    try:
+        return int(code) >= 400
+    except (TypeError, ValueError):
+        return False
+
+
+def _short_asset(url: Optional[str], limit: int = 48) -> str:
+    text = url or ""
+    if len(text) <= limit:
+        return text
+    return text[:24] + "…" + text[-(limit - 25):]
+
+
 def _plural(value: Optional[float], singular: str, plural: Optional[str] = None) -> str:
     return f"{_count(value)} {singular if value == 1 else plural or singular + 's'}"
 
@@ -287,6 +301,27 @@ def _summary_html(stats: dict) -> str:
         )
     else:
         sentences.append("No se registró ningún error durante la ejecución.")
+    http5 = stats.get("http_5xx") or 0
+    http4 = stats.get("http_4xx") or 0
+    if http5 or http4:
+        bits = []
+        if http5:
+            bits.append(f"{_count(http5)} respuestas 5xx")
+        if http4:
+            bits.append(f"{_count(http4)} respuestas 4xx")
+        sentences.append(
+            "En la navegación principal se vieron " + " y ".join(bits) +
+            " (el documento, no un recurso secundario)."
+        )
+    base = stats.get("baseline") or {}
+    delta = base.get("delta_p95_ms")
+    if delta is not None and not base.get("is_self"):
+        sign = "+" if delta > 0 else ""
+        pct = (base.get("delta_pct") or 0) * 100
+        sentences.append(
+            f"Contra la carga de referencia, el p95 activo cambió {sign}{_ms(delta)} "
+            f"({sign}{pct:.0f}%; referencia {_ms(base.get('p95_active_ms'))})."
+        )
     cpu = [s["cpu_percent"] for s in (stats.get("resources") or []) if s.get("cpu_percent") is not None]
     if cpu:
         sentences.append(
@@ -477,12 +512,44 @@ def _charts_html(stats: dict) -> str:
         total = sum(count for _, count in errors)
         cards.append(charts.card(
             "Tipos de error detectados",
-            "Clasificación automática de las fallas según el mensaje devuelto por el navegador.",
+            "Clasificación automática de las fallas según el mensaje devuelto por el navegador. "
+            "HTTP 502 es un 502 del documento, no un timeout de selector.",
             charts.donut(
                 [{"label": kind, "value": count, "text": f"{_count(count)} · {count / total * 100:.0f}%"}
                  for kind, count in errors],
                 center_value=_count(total), center_label="error" if total == 1 else "errores",
             ),
+        ))
+
+    http_codes = sorted(
+        ((code, count) for code, count in (stats.get("http_status") or {}).items()),
+        key=lambda kv: -kv[1],
+    )
+    if http_codes:
+        cards.append(charts.card(
+            "Códigos HTTP de la navegación",
+            "Status del documento en cada open_url. Distingue un 502 del backend de un timeout "
+            "o de un selector que no apareció.",
+            charts.hbars([{
+                "label": f"HTTP {code}",
+                "value": count,
+                "color": charts.RED if _http_is_error(code) else charts.BLUE,
+                "text": _count(count),
+            } for code, count in http_codes]),
+        ))
+
+    assets = stats.get("slow_assets") or []
+    if assets:
+        cards.append(charts.card(
+            "Recursos más lentos hasta DOMContentLoaded",
+            "Top JS, CSS y XHR por p95. No es un HAR completo: de cada open_url se guardan "
+            "los 10 recursos más lentos.",
+            charts.hbars([{
+                "label": f"{item.get('type')}: {_short_asset(item.get('url'))}",
+                "value": item.get("p95_ms") or item.get("avg_ms") or 0,
+                "color": charts.AMBER,
+                "text": f"p95 {_ms(item.get('p95_ms'))} · {_count(item.get('hits'))} hits",
+            } for item in assets[:12]], label_width=260),
         ))
 
     if len(probes) > 1:

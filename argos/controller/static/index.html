@@ -83,11 +83,27 @@
   .chart{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px}
   .chart h4{margin:0 0 2px;font-size:14px} .chart p{margin:0 0 10px;font-size:12px;color:var(--muted)}
   .chart svg{width:100%;height:auto;display:block}
+  .chart .hint{font-size:12px;color:var(--blue);margin:0 0 8px}
+  .chart-hit{fill:rgba(18,99,245,0);cursor:pointer}
+  .chart-hit:hover{fill:rgba(18,99,245,.10)}
+  .chart-hit.on{fill:rgba(18,99,245,.16)}
+  .inspect{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 18px;margin:0 0 22px}
+  .inspect.hidden{display:none}
+  .inspect .head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
+  .inspect h4{margin:0 0 4px;font-size:15px}
+  .inspect .close{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0 4px}
   .neck{border-left:5px solid var(--warn);background:linear-gradient(90deg,#fff9ef,#fff);
     border-radius:var(--radius);border:1px solid var(--line);padding:16px 20px;margin-bottom:20px}
   .neck .h{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:#a9701a;font-weight:700}
   .neck .t{font-size:18px;font-weight:700;margin:4px 0}
   .neck .d{font-size:13px;color:var(--muted)}
+  .neck.base{border-left-color:var(--blue)}
+  .neck.base .h{color:var(--blue-dark)}
+  .neck.base-ok{border-left-color:var(--ok)}
+  .neck.base-ok .h{color:var(--ok)}
+  .neck.base-bad{border-left-color:var(--bad)}
+  .neck.base-bad .h{color:var(--bad)}
   .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
   .pair .shot img{height:220px;object-fit:cover;object-position:top}
@@ -307,7 +323,8 @@
     <div id="detail-kpis" class="kpis"></div>
     <div id="detail-neck"></div>
     <div class="grid" id="detail-charts"
-         style="grid-template-columns:repeat(auto-fit,minmax(430px,1fr));margin-bottom:22px"></div>
+         style="grid-template-columns:repeat(auto-fit,minmax(430px,1fr));margin-bottom:14px"></div>
+    <div id="chart-inspect" class="inspect hidden"></div>
     <h3>Métricas de carga</h3>
     <div class="scroll" id="detail-metrics" style="margin-bottom:26px"></div>
     <h3>Recursos del generador</h3>
@@ -327,6 +344,8 @@ let view = "live";
 let origin = "live";     // vista desde la que se abrió el detalle
 let current = null;      // {instance, run}
 let timer = null;
+let inspectSel = null;
+let baselines = [];
 const STATUS = {running:"EN LÍNEA", finished:"FINALIZADO", offline:"SIN CONEXIÓN"};
 const openSondas = new Set();
 
@@ -343,6 +362,12 @@ function bytes(v){
   if(v >= 1048576) return (v/1048576).toFixed(1) + " MB";
   if(v >= 1024) return (v/1024).toFixed(0) + " KB";
   return Math.round(v) + " B";
+}
+function shortUrl(u, limit){
+  const text = String(u || "");
+  const cap = limit || 42;
+  if(text.length <= cap) return text;
+  return text.slice(0, 18) + "…" + text.slice(-(cap - 19));
 }
 function clock(iso){
   if(!iso) return "—";
@@ -412,8 +437,9 @@ function lineChart(series, opts){
   const x = i => PAD.l + (W - PAD.l - PAD.r) * (n <= 1 ? 0.5 : i/(n-1));
   const y = v => PAD.t + (H - PAD.t - PAD.b) * (1 - (v - minY)/(maxY - minY || 1));
   const unit = opts.unit || (v => Math.round(v));
+  const mark = opts.inspect ? ` data-inspect="${esc(opts.inspect)}"` : "";
 
-  let out = `<svg viewBox="0 0 ${W} ${H}" role="img">${axis(minY, maxY, unit)}`;
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img"${mark}>${axis(minY, maxY, unit)}`;
   series.forEach(s => {
     const pts = s.values.map((v,i) => v === null || v === undefined ? null : `${x(i).toFixed(1)},${y(v).toFixed(1)}`)
                         .filter(Boolean);
@@ -428,6 +454,14 @@ function lineChart(series, opts){
   (opts.markers || []).forEach(m => {
     out += `<circle cx="${x(m.i).toFixed(1)}" cy="${y(m.v).toFixed(1)}" r="3.5" fill="#dc3545"/>`;
   });
+  if(opts.inspect && n){
+    const hitW = Math.max(12, (W - PAD.l - PAD.r) / Math.max(n, 1));
+    const plotH = H - PAD.t - PAD.b;
+    for(let i = 0; i < n; i++){
+      out += `<rect class="chart-hit" data-i="${i}" x="${(x(i) - hitW/2).toFixed(1)}" y="${PAD.t}"
+              width="${hitW.toFixed(1)}" height="${plotH}"/>`;
+    }
+  }
   (opts.xLabels || []).forEach(l => {
     out += `<text x="${x(l.i).toFixed(1)}" y="${H-10}" text-anchor="middle" font-size="11" fill="#5b6b80">${esc(l.text)}</text>`;
   });
@@ -451,7 +485,8 @@ function barChart(items, opts){
   const height = top + items.length * rowH + 8;
   const labelW = 210, right = 70;
   const max = Math.max(...items.map(i => i.value)) || 1;
-  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  const mark = opts.inspect ? ` data-inspect="${esc(opts.inspect)}"` : "";
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img"${mark}>`;
   items.forEach((it, i) => {
     const y = top + i * rowH;
     const w = (W - labelW - right) * (it.value / max);
@@ -460,6 +495,10 @@ function barChart(items, opts){
     out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,w).toFixed(1)}" height="16" rx="4"
             fill="${it.color || "#1263f5"}"/>`;
     out += `<text x="${W-6}" y="${y+17}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(it.text)}</text>`;
+    if(opts.inspect){
+      out += `<rect class="chart-hit" data-i="${i}" data-step="${it.step_index ?? i}"
+              x="0" y="${y}" width="${W}" height="${rowH}"/>`;
+    }
   });
   out += `</svg>`;
   return out;
@@ -472,7 +511,7 @@ function stackedBarChart(items){
   const labelW = 190, right = 180;
   const trackW = W - labelW - right;
   const max = Math.max(...items.map(i => i.ok + i.fail)) || 1;
-  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img" data-inspect="step">`;
   items.forEach((it, i) => {
     const y = top + i * rowH;
     // El total se pinta en rojo y el tramo correcto se superpone en verde:
@@ -484,6 +523,8 @@ function stackedBarChart(items){
     out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,totalW).toFixed(1)}" height="16" rx="4" fill="#dc3545"/>`;
     if(it.ok) out += `<rect x="${labelW}" y="${y+4}" width="${Math.max(2,okW).toFixed(1)}" height="16" rx="4" fill="#0f9d58"/>`;
     out += `<text x="${W-6}" y="${y+17}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(it.text)}</text>`;
+    out += `<rect class="chart-hit" data-i="${i}" data-step="${it.step_index ?? i}"
+            x="0" y="${y}" width="${W}" height="${rowH}"/>`;
   });
   out += `</svg>
     <div class="legend"><span><i style="background:#0f9d58"></i>Correctos</span>
@@ -499,7 +540,7 @@ function waterfallChart(items){
   const height = top + items.length * rowH + 8;
   const track = W - labelW - right;
   const color = {active:"#1263f5", wait:"#c8d4e6", neck:"#e8a33d"};
-  let out = `<svg viewBox="0 0 ${W} ${height}" role="img">`;
+  let out = `<svg viewBox="0 0 ${W} ${height}" role="img" data-inspect="step">`;
   items.forEach((it, i) => {
     const y = top + i * rowH;
     const x = track * ((it.start_ms || 0) / total);
@@ -508,6 +549,8 @@ function waterfallChart(items){
     out += `<rect x="${labelW}" y="${y+5}" width="${track}" height="14" rx="3" fill="#f1f5fb"/>`;
     out += `<rect x="${labelW + x}" y="${y+5}" width="${w}" height="14" rx="3" fill="${color[it.kind] || "#1263f5"}"/>`;
     out += `<text x="${W-6}" y="${y+16}" text-anchor="end" font-size="12" fill="#5b6b80">${esc(ms(it.ms))}</text>`;
+    out += `<rect class="chart-hit" data-i="${i}" data-step="${it.step_index ?? i}"
+            x="0" y="${y}" width="${W}" height="${rowH}"/>`;
   });
   out += `</svg>
     <div class="legend"><span><i style="background:#1263f5"></i>Paso activo</span>
@@ -556,7 +599,7 @@ function throughputChart(points, bucketSeconds){
   const hasErrors = errors.some(v => v > 0);
   const errTop = Math.max(Math.max(...errors) * 1.3, 5);
 
-  let out = `<svg viewBox="0 0 ${W} ${H}" role="img">`;
+  let out = `<svg viewBox="0 0 ${W} ${H}" role="img" data-inspect="window">`;
   for(let i = 0; i <= 4; i++){
     const y = PAD.t + plotH * (i/4);
     out += `<line x1="${PAD.l}" y1="${y}" x2="${W-right}" y2="${y}" stroke="#eef2f8"/>`;
@@ -579,6 +622,10 @@ function throughputChart(points, bucketSeconds){
     out += `<polyline points="${pts.join(" ")}" fill="none" stroke="#dc3545" stroke-width="2"
             stroke-linejoin="round"/>`;
   }
+  points.forEach((_, i) => {
+    out += `<rect class="chart-hit" data-i="${i}" x="${(PAD.l + i*slot).toFixed(1)}" y="${PAD.t}"
+            width="${Math.max(4, slot).toFixed(1)}" height="${plotH}"/>`;
+  });
   out += `<text x="${PAD.l}" y="${H-10}" font-size="11" fill="#5b6b80">${esc(clock(points[0].t))}</text>`;
   out += `<text x="${W-right}" y="${H-10}" text-anchor="end" font-size="11" fill="#5b6b80">
           ${esc(clock(points[points.length-1].t))}</text></svg>`;
@@ -651,8 +698,10 @@ function apdexChart(score){
   return out + `</svg>`;
 }
 
-function chartCard(title, subtitle, body){
-  return `<div class="chart"><h4>${esc(title)}</h4><p>${esc(subtitle)}</p>${body}</div>`;
+function chartCard(title, subtitle, body, clickable){
+  return `<div class="chart"><h4>${esc(title)}</h4><p>${esc(subtitle)}</p>
+    ${clickable ? `<p class="hint">Click en un pico, barra o paso para ver el detalle.</p>` : ""}
+    ${body}</div>`;
 }
 
 /* ---------- agrupación: una carga = generadores que arrancaron juntos ---------- */
@@ -704,8 +753,46 @@ function cargaWhen(ms, until){
   return `${day} · ${start}`;
 }
 
+function runsKey(runs){
+  return String(runs || "").split(",").filter(Boolean).sort().join(",");
+}
+
 function cargaRunsParam(items){
   return items.map(it => `${it.instance_id}:${it.run_id}`).join(",");
+}
+
+function baselineFor(flow){
+  return (baselines || []).find(b => b.flow === flow) || null;
+}
+
+function cargaIsBaseline(runs, flow){
+  const bl = baselineFor(flow);
+  if(!bl) return false;
+  return runsKey(runs) === (bl.runs_key || runsKey((bl.runs || []).join(",")));
+}
+
+function cargaBaselinePill(st, runs){
+  const bl = baselineFor(st.flow);
+  if(!bl) return "";
+  if(cargaIsBaseline(runs, st.flow)) return `<span class="pill blue">REFERENCIA</span>`;
+  if(st.p95_active_ms == null || bl.p95_active_ms == null) return "";
+  const d = st.p95_active_ms - bl.p95_active_ms;
+  const sign = d > 0 ? "+" : "";
+  const bad = bl.p95_active_ms && d > bl.p95_active_ms * 0.1;
+  return `<span class="pill ${bad ? "err" : "on"}" title="p95 activo vs la carga marcada como referencia">
+    p95 activo ${sign}${ms(d)} vs ref</span>`;
+}
+
+async function postBaseline(body){
+  const res = await fetch("/api/baseline", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || "No se pudo guardar la referencia");
+  baselines = data.baselines || [];
+  return data;
 }
 
 function openCarga(items){
@@ -721,6 +808,7 @@ function cargaStats(items, probesOf){
   let users = 0, ok = 0, fail = 0, sondas = 0, onlineGens = 0;
   const flows = new Set();
   const p95s = [];
+  const p95as = [];
   items.forEach(it => {
     users += it.users || 0;
     ok += it.ok || it.successes || 0;
@@ -731,6 +819,8 @@ function cargaStats(items, probesOf){
     if(it.flow) flows.add(it.flow);
     const p95 = it.p95_ms;
     if(p95 != null) p95s.push(p95);
+    const p95a = it.p95_active_ms;
+    if(p95a != null) p95as.push(p95a);
   });
   const journeys = ok + fail;
   return {
@@ -738,6 +828,7 @@ function cargaStats(items, probesOf){
     flow: [...flows].join(" · ") || "flujo",
     error_rate: journeys ? fail / journeys : 0,
     p95_ms: p95s.length ? Math.max(...p95s) : null,
+    p95_active_ms: p95as.length ? Math.max(...p95as) : null,
   };
 }
 
@@ -873,6 +964,9 @@ function cargaCard(cluster, opts){
         ${opts && opts.pick ? `<label class="pick" title="Incluir esta carga en la comparación">
           <input type="checkbox" class="pick-carga" value="${esc(runs)}"></label>` : ""}
         <span class="pill ${statusPill}">${statusLabel}</span>
+        ${cargaBaselinePill(st, runs)}
+        ${!(opts && opts.live) ? `<button type="button" class="btn ghost carga-base" data-runs="${esc(runs)}" data-flow="${esc(st.flow)}">
+          ${cargaIsBaseline(runs, st.flow) ? "Quitar referencia" : "Usar como referencia"}</button>` : ""}
         <button type="button" class="btn primary carga-report" data-runs="${esc(runs)}">
           ${items.length > 1 ? "Informe consolidado" : "Ver informe"}</button>
       </div>
@@ -934,6 +1028,24 @@ function bindCargaClicks(root){
       openCarga(parts);
     };
   });
+  root.querySelectorAll(".carga-base").forEach(btn => {
+    btn.onclick = async (ev) => {
+      ev.stopPropagation();
+      const runs = btn.dataset.runs || "";
+      const flow = btn.dataset.flow || "";
+      btn.disabled = true;
+      try {
+        if(cargaIsBaseline(runs, flow)) await postBaseline({clear: true, flow});
+        else await postBaseline({runs});
+        const date = $("date-select") && $("date-select").value;
+        if(date) await loadRuns(date);
+      } catch (err) {
+        alert(err.message || String(err));
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
   root.querySelectorAll(".sonda-box").forEach(box => {
     box.addEventListener("toggle", () => {
       const gen = box.closest(".gen");
@@ -964,6 +1076,7 @@ function bindCargaClicks(root){
 /* ---------- vista: ejecuciones ---------- */
 async function loadDates(){
   const data = await fetch("/api/runs").then(r => r.json()).catch(() => ({dates:[]}));
+  baselines = data.baselines || [];
   const sel = $("date-select");
   const dates = data.dates || [];
   if(!dates.length){
@@ -1014,6 +1127,7 @@ function filterByHour(items){
 
 async function loadRuns(date){
   const data = await fetch("/api/runs?date=" + encodeURIComponent(date)).then(r => r.json());
+  baselines = data.baselines || [];
   const dayItems = data.items || [];
   if(!dayItems.length){
     $("runs-list").innerHTML = `<div class="card empty">Sin cargas en ${esc(date)}.</div>`;
@@ -1244,21 +1358,23 @@ function renderCharts(stats){
     cards.push(chartCard(
       "Rendimiento y errores durante la ejecución",
       "Journeys que el sitio alcanzó a completar en cada ventana. Si las barras dejan de crecer " +
-      "mientras la línea roja sube, ahí está el punto de quiebre.",
-      throughputChart(tp.points, tp.bucket_seconds)
+      "mientras la línea roja sube, ahí está el punto de quiebre. Click en un pico abre los pasos de esa ventana.",
+      throughputChart(tp.points, tp.bucket_seconds),
+      true
     ));
     cards.push(chartCard(
       "Percentiles a lo largo del tiempo",
       "Que el p95 se separe del p50 significa que unos pocos usuarios la están pasando mucho " +
-      "peor que el resto.",
+      "peor que el resto. Click en el pico para ver qué paso lo infló.",
       lineChart([
         {label:"p99", values: tp.points.map(p => p.p99_ms), color:"#7b61ff"},
         {label:"p95", values: tp.points.map(p => p.p95_ms), color:"#e8a33d"},
         {label:"p50 (mediana)", values: tp.points.map(p => p.p50_ms), color:"#1263f5"},
-      ], {unit: v => (v/1000).toFixed(1) + " s", legend: true, xLabels: [
+      ], {unit: v => (v/1000).toFixed(1) + " s", legend: true, inspect: "window", xLabels: [
         {i:0, text:clock(tp.points[0].t)},
         {i:tp.points.length-1, text:clock(tp.points[tp.points.length-1].t)},
-      ]})
+      ]}),
+      true
     ));
   }
 
@@ -1283,8 +1399,9 @@ function renderCharts(stats){
   if((stats.waterfall || []).length){
     cards.push(chartCard(
       "Cascada del journey típico",
-      "Mediana de cada paso en secuencia. El gris es think time; el ámbar es el cuello de botella.",
-      waterfallChart(stats.waterfall)
+      "Mediana de cada paso en secuencia. El gris es think time; el ámbar es el cuello de botella. Click en un paso.",
+      waterfallChart(stats.waterfall),
+      true
     ));
   }
 
@@ -1314,9 +1431,10 @@ function renderCharts(stats){
       : [];
     cards.push(chartCard(
       "Duración del flujo en el tiempo",
-      "Cada punto es un journey completo; en rojo los que fallaron.",
+      "Cada punto es un journey completo; en rojo los que fallaron. Click en un pico para ver sus pasos.",
       lineChart([{label:"Duración", values: tl.map(p => p.ms), color:"#1263f5", fill:true}],
-                {unit: v => (v/1000).toFixed(1) + " s", markers, xLabels: labels})
+                {unit: v => (v/1000).toFixed(1) + " s", markers, xLabels: labels, inspect: "journey"}),
+      true
     ));
   }
 
@@ -1324,13 +1442,15 @@ function renderCharts(stats){
   if(steps.length){
     cards.push(chartCard(
       "Tiempo por paso · dónde se va el flujo",
-      "Barra = p95 del paso; la barra ámbar es el cuello de botella.",
+      "Barra = p95 del paso; la barra ámbar es el cuello de botella. Click para el detalle del paso.",
       barChart(steps.map(s => ({
         label: `${s.step_index}. ${s.label}`,
+        step_index: s.step_index,
         value: s.p95_ms || s.avg_ms || 0,
         color: s.bottleneck ? "#e8a33d" : "#1263f5",
         text: `p95 ${ms(s.p95_ms)} · prom ${ms(s.avg_ms)}`
-      })))
+      })), {inspect: "step"}),
+      true
     ));
 
     const failed = steps.filter(s => s.fail).length;
@@ -1340,23 +1460,27 @@ function renderCharts(stats){
              : "Todos los pasos se ejecutaron sin fallos.",
       stackedBarChart(steps.map(s => ({
         label: `${s.step_index}. ${s.label}`,
+        step_index: s.step_index,
         ok: s.ok,
         fail: s.fail,
         text: s.fail ? `${nf.format(s.ok)} OK · ${nf.format(s.fail)} FAIL (${(s.fail_rate*100).toFixed(1)}%)`
                      : `${nf.format(s.ok)} OK`
-      })))
+      }))),
+      true
     ));
 
     const domRows = steps.filter(s => s.dom_size_bytes && s.dom_size_bytes.avg);
     if(domRows.length){
       cards.push(chartCard(
         "Peso del DOM por paso",
-        "Tamaño mediano del HTML en cada pantalla.",
+        "Tamaño mediano del HTML en cada pantalla. Click para el detalle del paso.",
         barChart(domRows.map(s => ({
           label: `${s.step_index}. ${s.label}`,
+          step_index: s.step_index,
           value: s.dom_size_bytes.avg,
           text: bytes(s.dom_size_bytes.avg)
-        })))
+        })), {inspect: "step"}),
+        true
       ));
     }
   }
@@ -1369,6 +1493,34 @@ function renderCharts(stats){
       ? barChart(errors.map(([k,v]) => ({label:k, value:v, color:"#dc3545", text:nf.format(v)})))
       : `<div class="empty">Todos los flujos terminaron correctos.</div>`
   ));
+
+  const httpCodes = Object.entries(stats.http_status || {}).sort((a,b) => b[1]-a[1]);
+  if(httpCodes.length){
+    cards.push(chartCard(
+      "Códigos HTTP de la navegación",
+      `${nf.format(stats.http_5xx || 0)} respuestas 5xx · ${nf.format(stats.http_4xx || 0)} respuestas 4xx del documento (open_url).`,
+      barChart(httpCodes.map(([k,v]) => ({
+        label: "HTTP " + k,
+        value: v,
+        color: Number(k) >= 400 ? "#dc3545" : "#1263f5",
+        text: nf.format(v)
+      })))
+    ));
+  }
+
+  const assets = stats.slow_assets || [];
+  if(assets.length){
+    cards.push(chartCard(
+      "Recursos más lentos hasta DOMContentLoaded",
+      "Top JS, CSS y XHR por p95. De cada open_url se guardan los 10 más lentos.",
+      barChart(assets.slice(0, 12).map(a => ({
+        label: (a.type || "other") + " · " + shortUrl(a.url),
+        value: a.p95_ms || a.avg_ms || 0,
+        color: "#e8a33d",
+        text: ms(a.p95_ms || a.avg_ms)
+      })))
+    ));
+  }
 
   const res = stats.resources || [];
   if(res.length){
@@ -1385,16 +1537,247 @@ function renderCharts(stats){
     ));
   }
   $("detail-charts").innerHTML = cards.join("");
+  bindChartInspect(stats);
+  if(inspectSel === "closed"){
+    $("chart-inspect").classList.add("hidden");
+  } else if(inspectSel){
+    showInspect(inspectSel.kind, inspectSel.index, stats, false);
+  } else {
+    openPeakWindow(stats);
+  }
+}
+
+function bindChartInspect(stats){
+  $("detail-charts").querySelectorAll("svg[data-inspect]").forEach(svg => {
+    svg.querySelectorAll(".chart-hit").forEach(hit => {
+      hit.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const kind = svg.getAttribute("data-inspect");
+        const index = Number(kind === "step"
+          ? (hit.dataset.step ?? hit.dataset.i) : hit.dataset.i);
+        $("detail-charts").querySelectorAll(".chart-hit.on").forEach(h => h.classList.remove("on"));
+        hit.classList.add("on");
+        showInspect(kind, index, stats, true);
+      });
+    });
+  });
+}
+
+function openPeakWindow(stats){
+  const pts = (stats.throughput || {}).points || [];
+  if(!pts.length) return;
+  let best = 0, bestV = -1;
+  pts.forEach((p, i) => {
+    const v = p.p95_ms || p.per_minute || 0;
+    if(v > bestV){ bestV = v; best = i; }
+  });
+  showInspect("window", best, stats, false);
+  const hit = $("detail-charts").querySelector(`svg[data-inspect="window"] .chart-hit[data-i="${best}"]`);
+  if(hit) hit.classList.add("on");
+}
+
+function inspectKpis(items){
+  return `<div class="kpis" style="margin-bottom:12px">${items.filter(Boolean).join("")}</div>`;
+}
+
+function inspectStepsTable(steps, perJourney){
+  if(!steps || !steps.length) return `<div class="empty">Sin pasos en este recorte.</div>`;
+  if(perJourney){
+    return `<table><thead><tr><th class="l">#</th><th class="l">Paso</th><th class="l">Acción</th>
+      <th>Duración</th><th class="l">HTTP</th><th class="l">Estado</th></tr></thead><tbody>` +
+      steps.map(s => `<tr class="${s.ok ? "" : "slow"}">
+        <td class="l">${s.step_index}</td>
+        <td class="l">${esc(s.label || "")}</td>
+        <td class="l"><span class="pill blue">${esc(s.action || "")}</span></td>
+        <td>${ms(s.ms)}</td>
+        <td class="l">${s.http != null ? `<span class="pill ${s.http >= 400 ? "err" : "on"}">${s.http}</span>` : "—"}</td>
+        <td class="l">${s.ok ? '<span class="pill on">OK</span>' :
+          `<span class="pill err">FAIL</span> ${esc(s.error || "")}`}</td>
+      </tr>`).join("") + `</tbody></table>`;
+  }
+  return `<table><thead><tr><th class="l">#</th><th class="l">Paso</th><th class="l">Acción</th>
+    <th>Ejec.</th><th>OK</th><th>FAIL</th><th>P50</th><th>P95</th></tr></thead><tbody>` +
+    steps.map(s => `<tr class="${s.bottleneck ? "slow" : ""}">
+      <td class="l">${s.step_index}</td>
+      <td class="l">${esc(s.label || "")} ${s.bottleneck ? '<span class="pill warn">cuello</span>' : ""}</td>
+      <td class="l"><span class="pill blue">${esc(s.action || "")}</span></td>
+      <td>${nf.format(s.runs || 0)}</td>
+      <td style="color:var(--ok)">${nf.format(s.ok || 0)}</td>
+      <td style="color:${s.fail ? "var(--bad)" : "var(--muted)"}">${nf.format(s.fail || 0)}</td>
+      <td>${ms(s.p50_ms)}</td><td><b>${ms(s.p95_ms)}</b></td>
+    </tr>`).join("") + `</tbody></table>`;
+}
+
+function showInspect(kind, index, stats, fromClick){
+  const box = $("chart-inspect");
+  if(!box) return;
+  inspectSel = {kind, index};
+  let html = "";
+  if(kind === "window"){
+    const p = ((stats.throughput || {}).points || [])[index];
+    if(!p){ box.classList.add("hidden"); return; }
+    const neck = (p.steps || []).find(s => s.bottleneck);
+    html = `<div class="head">
+        <div>
+          <h4>Ventana ${clock(p.t)} – ${clock(p.until)}</h4>
+          <p class="muted" style="margin:0">Click en otro pico para cambiar de ventana.</p>
+        </div>
+        <button type="button" class="close" id="inspect-close" aria-label="Cerrar">×</button>
+      </div>` +
+      inspectKpis([
+        kpi("Journeys", nf.format(p.journeys || 0), `${(stats.throughput || {}).bucket_seconds || "—"} s`, "blue"),
+        kpi("Incorrectos", nf.format(p.fail || 0), pct(p.error_rate), p.fail ? "bad" : "ok"),
+        kpi("Por minuto", (p.per_minute || 0).toFixed(1)),
+        kpi("P50", ms(p.p50_ms)),
+        kpi("P95", ms(p.p95_ms), p.active_p95_ms ? `activo ${ms(p.active_p95_ms)}` : null),
+        kpi("P99", ms(p.p99_ms)),
+        neck ? kpi("Cuello", `Paso ${neck.step_index}`, neck.label, "blue") : null,
+      ]) +
+      `<h3 style="margin:4px 0 8px">Pasos en esta ventana</h3>
+       <div class="scroll" style="margin-bottom:14px">${inspectStepsTable(p.steps)}</div>
+       <h3 style="margin:4px 0 8px">Journeys más lentos del pico</h3>
+       <div class="scroll">${inspectSamples(p.samples)}</div>`;
+  } else if(kind === "journey"){
+    const p = (stats.timeline || [])[index];
+    if(!p){ box.classList.add("hidden"); return; }
+    html = `<div class="head">
+        <div>
+          <h4>${esc(p.probe_id || "sonda")} · ${clock(p.t)}</h4>
+          <p class="muted" style="margin:0">${p.ok ? "Journey correcto" : "Journey con fallo"} · duración ${ms(p.ms)}</p>
+        </div>
+        <button type="button" class="close" id="inspect-close" aria-label="Cerrar">×</button>
+      </div>` +
+      inspectKpis([
+        kpi("Duración", ms(p.ms), p.ok ? "OK" : "FAIL", p.ok ? "ok" : "bad"),
+        kpi("Tiempo activo", ms(p.active)),
+        kpi("Sonda", esc(p.probe_id || "—"), null, "blue"),
+      ]) +
+      (p.dataset && Object.keys(p.dataset).length
+        ? `<p class="muted">Fila CSV: ${Object.entries(p.dataset).map(([k,v]) =>
+            `${esc(k)}=${esc(String(v))}`).join(" · ")}</p>`
+        : "") +
+      (p.error ? `<p class="err" style="color:var(--bad);font-size:13px">${esc(p.error)}</p>` : "") +
+      `<h3 style="margin:4px 0 8px">Pasos de este journey</h3>
+       <div class="scroll">${inspectStepsTable(p.steps, true)}</div>` +
+      inspectAssets((p.steps || []).flatMap(s =>
+        (s.resources || []).map(r => Object.assign({step: s.step_index}, r))
+      ));
+  } else if(kind === "step"){
+    const s = (stats.steps || []).find(row => row.step_index === index)
+      || (stats.steps || [])[index];
+    if(!s){ box.classList.add("hidden"); return; }
+    const errors = Object.entries(s.error_types || {});
+    html = `<div class="head">
+        <div>
+          <h4>Paso ${s.step_index} · ${esc(s.label || "")}</h4>
+          <p class="muted" style="margin:0">Acción ${esc(s.action || "—")}${s.bottleneck ? " · cuello de botella de la carga" : ""}</p>
+        </div>
+        <button type="button" class="close" id="inspect-close" aria-label="Cerrar">×</button>
+      </div>` +
+      inspectKpis([
+        kpi("Ejecuciones", nf.format(s.runs || 0), null, "blue"),
+        kpi("Correctos", nf.format(s.ok || 0), null, "ok"),
+        kpi("Incorrectos", nf.format(s.fail || 0), pct(s.fail_rate), s.fail ? "bad" : ""),
+        kpi("P50", ms(s.p50_ms)),
+        kpi("P95", ms(s.p95_ms)),
+        kpi("Máx", ms(s.max_ms)),
+        kpi("% activo", (s.share_pct || 0).toFixed(1) + "%"),
+        s.dom_size_bytes && s.dom_size_bytes.avg
+          ? kpi("Peso DOM", bytes(s.dom_size_bytes.avg),
+                s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null)
+          : null,
+      ]) +
+      (errors.length
+        ? `<p class="muted">Errores: ${errors.map(([k,v]) => `${esc(k)} ${nf.format(v)}`).join(" · ")}</p>`
+        : "") +
+      (s.http_status && Object.keys(s.http_status).length
+        ? `<p class="muted">HTTP: ${Object.entries(s.http_status).map(([k,v]) =>
+            `${k} × ${nf.format(v)}`).join(" · ")}</p>`
+        : "") +
+      inspectAssets(s.slow_assets);
+  } else {
+    box.classList.add("hidden");
+    return;
+  }
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+  $("detail-charts").querySelectorAll(".chart-hit.on").forEach(h => h.classList.remove("on"));
+  $("detail-charts").querySelectorAll(`svg[data-inspect="${kind}"] .chart-hit`).forEach(h => {
+    const idx = Number(kind === "step" ? (h.dataset.step ?? h.dataset.i) : h.dataset.i);
+    if(idx === index) h.classList.add("on");
+  });
+  const close = $("inspect-close");
+  if(close) close.onclick = () => {
+    inspectSel = "closed";
+    box.classList.add("hidden");
+    $("detail-charts").querySelectorAll(".chart-hit.on").forEach(h => h.classList.remove("on"));
+  };
+  if(fromClick) box.scrollIntoView({behavior: "smooth", block: "nearest"});
+}
+
+function inspectAssets(assets){
+  if(!assets || !assets.length) return "";
+  return `<h3 style="margin:14px 0 8px">Recursos más lentos (hasta DOMContentLoaded)</h3>
+    <div class="scroll"><table><thead><tr>
+      <th class="l">Tipo</th><th class="l">URL</th><th>Duración</th><th>Peso</th>
+    </tr></thead><tbody>` +
+    assets.slice(0, 12).map(a => `<tr>
+      <td class="l"><span class="pill blue">${esc(a.type || "other")}</span></td>
+      <td class="l" title="${esc(a.url || "")}">${esc(shortUrl(a.url, 72))}</td>
+      <td>${ms(a.duration_ms != null ? a.duration_ms : (a.p95_ms || a.avg_ms))}</td>
+      <td>${bytes(a.transfer_size != null ? a.transfer_size : a.bytes)}</td>
+    </tr>`).join("") + `</tbody></table></div>`;
+}
+
+function inspectSamples(samples){
+  if(!samples || !samples.length) return `<div class="empty">Sin journeys en esta ventana.</div>`;
+  return `<table><thead><tr><th class="l">Sonda</th><th class="l">Hora</th><th>Duración</th>
+    <th>Activo</th><th class="l">Resultado</th></tr></thead><tbody>` +
+    samples.map(s => {
+      const fail = s.fail_step;
+      return `<tr class="${s.ok ? "" : "slow"}">
+        <td class="l">${esc(s.probe_id || "—")}</td>
+        <td class="l">${clock(s.t)}</td>
+        <td>${ms(s.ms)}</td>
+        <td>${ms(s.active)}</td>
+        <td class="l">${s.ok ? '<span class="pill on">OK</span>' :
+          `<span class="pill err">FAIL</span> ${fail
+            ? `paso ${fail.step_index} · ${esc(fail.label || "")} · ${esc(fail.error || "")}`
+            : ""}`}</td>
+      </tr>`;
+    }).join("") + `</tbody></table>`;
 }
 
 function renderNeck(stats){
+  const parts = [];
+  const bl = stats.baseline;
+  if(bl){
+    if(bl.is_self){
+      parts.push(`<div class="neck base">
+        <div class="h">Carga de referencia</div>
+        <div class="t">p95 activo ${ms(bl.p95_active_ms)}</div>
+        <div class="d">Las próximas corridas del flujo «${esc(bl.flow || "")}» se comparan contra este p95.</div>
+      </div>`);
+    } else if(bl.delta_p95_ms != null){
+      const worse = bl.delta_p95_ms > 0;
+      const sign = bl.delta_p95_ms > 0 ? "+" : "";
+      parts.push(`<div class="neck ${worse ? "base-bad" : "base-ok"}">
+        <div class="h">vs referencia</div>
+        <div class="t">p95 activo ${sign}${ms(bl.delta_p95_ms)} (${sign}${((bl.delta_pct || 0)*100).toFixed(0)}%)</div>
+        <div class="d">Referencia ${ms(bl.p95_active_ms)} · ${esc(bl.flow || "")} · ${stamp(bl.started_at)}.
+          ${worse ? "El sitio está más lento que la carga marcada." : "El p95 activo mejoró o se mantuvo."}</div>
+      </div>`);
+    }
+  }
   const b = stats.bottleneck;
-  if(!b){ $("detail-neck").innerHTML = ""; return; }
-  $("detail-neck").innerHTML = `<div class="neck">
-    <div class="h">Cuello de botella detectado</div>
-    <div class="t">Paso ${b.step_index} · ${esc(b.label)}</div>
-    <div class="d">Este paso ${esc(b.reason)}. Máximo observado ${ms(b.max_ms)}.</div>
-  </div>`;
+  if(b){
+    parts.push(`<div class="neck">
+      <div class="h">Cuello de botella detectado</div>
+      <div class="t">Paso ${b.step_index} · ${esc(b.label)}</div>
+      <div class="d">Este paso ${esc(b.reason)}. Máximo observado ${ms(b.max_ms)}.</div>
+    </div>`);
+  }
+  $("detail-neck").innerHTML = parts.join("");
 }
 
 function renderSondas(stats){
@@ -1426,6 +1809,7 @@ function renderSondas(stats){
 }
 
 async function openDetail(instance, run){
+  if(!current || current.instance !== instance || current.run !== run) inspectSel = null;
   current = {instance, run};
   origin = view;
   switchView("detail");
@@ -1453,6 +1837,8 @@ async function loadDetail(){
     $("detail-kpis").innerHTML = whenKpis + kpi("Peso DOM", "—");
     $("detail-neck").innerHTML = "";
     $("detail-charts").innerHTML = `<div class="card empty">Aún no llegan journeys de esta corrida.</div>`;
+    $("chart-inspect").classList.add("hidden");
+    $("chart-inspect").innerHTML = "";
     $("detail-metrics").innerHTML = "";
     $("detail-resources").innerHTML = "";
     $("detail-steps").innerHTML = "";
@@ -1466,11 +1852,20 @@ async function loadDetail(){
     kpi("Journeys", nf.format(s.journeys), `${nf.format(s.sondas)} sondas`, "blue") +
     kpi("Flujos correctos", nf.format(s.ok), pct(s.success_rate), "ok") +
     kpi("Flujos incorrectos", nf.format(s.fail), pct(1 - s.success_rate), s.fail ? "bad" : "") +
+    kpi("HTTP 5xx", nf.format(s.http_5xx || 0),
+        s.http_4xx ? `${nf.format(s.http_4xx)} de 4xx` : "del documento",
+        s.http_5xx ? "bad" : "") +
     kpi("Navegaciones", nf.format(s.navigations), `${nf.format(s.clicks)} clicks · ${nf.format(s.asserts)} validaciones`) +
     kpi("Apdex", s.apdex ? s.apdex.score.toFixed(2) : "—",
         s.apdex ? `umbral ${ms(s.apdex.threshold_ms)}` : null, "blue") +
     kpi("Tiempo activo", ms(f.avg), `${ms(f.min)} — ${ms(f.max)}`) +
     kpi("P95 activo", ms(P(f,"p95")), `p50 ${ms(P(f,"p50"))} · p99 ${ms(P(f,"p99"))}`) +
+    (s.baseline && s.baseline.delta_p95_ms != null
+      ? kpi("vs referencia",
+            (s.baseline.delta_p95_ms > 0 ? "+" : "") + ms(s.baseline.delta_p95_ms),
+            `${((s.baseline.delta_pct || 0)*100).toFixed(0)}% · p95 ref ${ms(s.baseline.p95_active_ms)}`,
+            s.baseline.delta_p95_ms > 0 ? "bad" : "ok")
+      : "") +
     kpi("LCP p75", ms(P(s.lcp_ms,"p75") || (s.lcp_ms && s.lcp_ms.avg)),
         s.cls ? `CLS ${Number(P(s.cls,"p75") || s.cls.avg).toFixed(3)}` : `prom ${ms(s.lcp_ms && s.lcp_ms.avg)}`) +
     kpi("TTFB p95", ms(P(s.ttfb_ms,"p95")), `prom ${ms(s.ttfb_ms && s.ttfb_ms.avg)}`) +
@@ -1522,7 +1917,27 @@ const GLOSSARY = [
     {term:"Duración total del journey", aka:"total_duration_ms · flow_ms",
      what:"Del primer paso al cierre del journey, incluyendo waits y el overhead del navegador.",
      how:"(end_time − start_time) en milisegundos, reloj de pared.",
-     watch:"En vivo, el p50/p95 de la sesión usa ESTA duración (incluye think time). En el informe, el p95 que importa es el de tiempo activo."}
+     watch:"En vivo, el p50/p95 de la sesión usa ESTA duración (incluye think time). En el informe, el p95 que importa es el de tiempo activo."},
+    {term:"HTTP de la navegación", aka:"http_status · HTTP 5xx",
+     what:"El código de status del documento en cada open_url. Un 502 no es un timeout ni un selector faltante.",
+     how:"Playwright page.goto() → response.status. Si es 400 o más, el paso FALLA con mensaje «HTTP 502 …».",
+     watch:"Cuenta el documento, no un JS de terceros. Buscá X-Argos-Run en el access.log del SUT para cruzar."},
+    {term:"Recursos lentos", aka:"slow_assets · HAR-lite",
+     what:"Los JS, CSS y XHR más lentos de cada open_url, medidos hasta DOMContentLoaded.",
+     how:"performance.getEntriesByType('resource'), top 10 por duración. No es un HAR completo.",
+     watch:"En --lite no hay imágenes ni fuentes: la lista es scripts y XHR. Sirve para ver qué asset se come el p95."},
+    {term:"Headers X-Argos-*", aka:"X-Argos-Run · Probe · VU · Instance",
+     what:"Cabeceras que cada navegación first-party lleva al sitio, para correlacionar el access.log con la corrida.",
+     how:"Se inyectan solo en el documento y en requests del mismo origin del flujo. Los terceros no se etiquetan para no romper CORS.",
+     watch:"En nginx: log_format con $http_x_argos_run. El run_id sale al arrancar el runner."},
+    {term:"Dataset CSV", aka:"{{campo}} · --data",
+     what:"Filas de usuarios, SKU o búsquedas. Cada sonda toma una y reemplaza {{campo}} en el YAML.",
+     how:"--data users.csv. La sonda N usa la fila (N + iteración) módulo el largo, para no loguear todos con el mismo user.",
+     watch:"Sin CSV, 100 sondas son el mismo bot. Las columnas pass/clave/secret no viajan al collector."},
+    {term:"Referencia / baseline", aka:"Usar como referencia",
+     what:"Una carga marcada contra la que se mira el p95 activo de las siguientes del mismo flujo.",
+     how:"En Ejecuciones, botón «Usar como referencia». El informe muestra el delta en ms y en %.",
+     watch:"Marcá una corrida buena (poca carga o el escalón que el sitio aguantó). Si el siguiente escalón sube >10% el p95, el sitio ya no está igual."}
   ]},
   {group:"Carga en curso", items:[
     {term:"Carga en curso", aka:"prueba que está corriendo ahora",

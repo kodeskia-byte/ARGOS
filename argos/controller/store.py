@@ -15,6 +15,19 @@ SAFE_NAME = re.compile(r"^[\w.\-]+$")
 RUN_ID_STAMP = re.compile(r"(\d{8})_(\d{6})")
 
 
+def _parse_runs(raw: str) -> List[tuple]:
+    selections = []
+    for token in (raw or "").split(","):
+        instance_id, _, run_id = token.strip().partition(":")
+        if instance_id and run_id:
+            selections.append((instance_id, run_id))
+    return selections
+
+
+def _runs_key(selections: List[tuple]) -> str:
+    return ",".join(f"{instance}:{run}" for instance, run in sorted(selections))
+
+
 def _local(iso: Optional[str]) -> Optional[str]:
     """Naive local-time ISO so dates, sorting and display all agree."""
     if not iso:
@@ -120,8 +133,15 @@ class Store:
                     iterations INTEGER
                 );
                 CREATE INDEX IF NOT EXISTS idx_resources_run ON resources(instance_id, run_id, id);
+                CREATE TABLE IF NOT EXISTS baselines (
+                    flow TEXT PRIMARY KEY,
+                    payload TEXT NOT NULL
+                );
                 """
             )
+            cols = {row[1] for row in self._conn.execute("PRAGMA table_info(runs)")}
+            if "p95_active_ms" not in cols:
+                self._conn.execute("ALTER TABLE runs ADD COLUMN p95_active_ms REAL")
             self._conn.commit()
 
     def save_heartbeat(self, payload: dict):
@@ -192,6 +212,8 @@ class Store:
         summary = payload.get("summary") or {}
         flow_stats = summary.get("flow_duration_ms") or {}
         percentiles = flow_stats.get("percentiles") or {}
+        active = summary.get("active_ms") or {}
+        p95_active = (active.get("percentiles") or {}).get("p95")
         iterations = int(summary.get("iterations") or payload.get("iterations") or 0)
         successes = int(summary.get("successes") or payload.get("ok") or 0)
         failures = int(summary.get("failures") or payload.get("fail") or 0)
@@ -200,8 +222,9 @@ class Store:
                 """
                 INSERT INTO runs (
                     run_id, instance_id, started_at, ended_at, run_date, users, flow,
-                    iterations, successes, failures, success_rate, p50_ms, p95_ms, summary
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    iterations, successes, failures, success_rate, p50_ms, p95_ms,
+                    p95_active_ms, summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id, instance_id) DO UPDATE SET
                     ended_at=excluded.ended_at,
                     users=excluded.users,
@@ -212,6 +235,7 @@ class Store:
                     success_rate=excluded.success_rate,
                     p50_ms=excluded.p50_ms,
                     p95_ms=excluded.p95_ms,
+                    p95_active_ms=excluded.p95_active_ms,
                     summary=excluded.summary
                 """,
                 (
@@ -228,6 +252,7 @@ class Store:
                     float(summary.get("success_rate") or 0),
                     percentiles.get("p50"),
                     percentiles.get("p95"),
+                    p95_active,
                     json.dumps(summary),
                 ),
             )
@@ -441,7 +466,9 @@ class Store:
             "resources": self.resource_series(instance_id, run_id),
             "probes": list(probes.values()),
         }
-        detail["stats"] = analyze_run(detail)
+        detail["stats"] = self._with_baseline(
+            analyze_run(detail), detail.get("flow"), [(instance_id, run_id)],
+        )
         return detail
 
     def compare(self, selections: List[tuple]) -> dict:
@@ -488,7 +515,9 @@ class Store:
             "resources": sorted(resources, key=lambda sample: sample.get("ts") or ""),
             "probes": probes,
         }
-        combined["stats"] = analyze_run(combined)
+        combined["stats"] = self._with_baseline(
+            analyze_run(combined), combined.get("flow"), selections,
+        )
         return {"runs": runs, "combined": combined}
 
     def evidence_file(self, run_id: str, probe_id: str, filename: str) -> Optional[str]:
@@ -553,6 +582,7 @@ class Store:
                 "success_rate": row["success_rate"] or 0,
                 "p50_ms": row["p50_ms"],
                 "p95_ms": row["p95_ms"],
+                "p95_active_ms": row["p95_active_ms"] if "p95_active_ms" in row.keys() else None,
                 "sondas": 0,
                 "finished": True,
             }
@@ -574,6 +604,7 @@ class Store:
                     "success_rate": round((row["ok"] or 0) / iterations, 4) if iterations else 0,
                     "p50_ms": None,
                     "p95_ms": None,
+                    "p95_active_ms": None,
                     "finished": False,
                 }
                 runs[key] = item
@@ -622,3 +653,90 @@ class Store:
             "p95_ms": round(max(p95s), 3) if p95s else None,
             "items": runs,
         }
+
+    def list_baselines(self) -> List[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT payload FROM baselines").fetchall()
+        items = []
+        for row in rows:
+            try:
+                items.append(json.loads(row["payload"]))
+            except (TypeError, ValueError):
+                continue
+        return items
+
+    def baseline_for_flow(self, flow: Optional[str]) -> Optional[dict]:
+        if not flow:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT payload FROM baselines WHERE flow = ?", (flow,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["payload"])
+        except (TypeError, ValueError):
+            return None
+
+    def clear_baseline(self, flow: Optional[str] = None):
+        with self._lock:
+            if flow:
+                self._conn.execute("DELETE FROM baselines WHERE flow = ?", (flow,))
+            else:
+                self._conn.execute("DELETE FROM baselines")
+            self._conn.commit()
+
+    def set_baseline(self, payload: dict) -> dict:
+        if payload.get("clear"):
+            self.clear_baseline(payload.get("flow"))
+            return {"ok": True, "baselines": self.list_baselines()}
+        selections = _parse_runs(payload.get("runs") or "")
+        if not selections:
+            raise ValueError("runs requerido, ej. gen-01:run_x,gen-02:run_y")
+        compared = self.compare(selections)
+        combined = compared.get("combined") or {}
+        stats = combined.get("stats") or {}
+        p95 = ((stats.get("active_ms") or {}).get("percentiles") or {}).get("p95")
+        if p95 is None:
+            raise ValueError("esa carga aún no tiene p95 de tiempo activo")
+        flow = combined.get("flow") or payload.get("flow") or "*"
+        record = {
+            "flow": flow,
+            "runs": [f"{instance}:{run}" for instance, run in selections],
+            "runs_key": _runs_key(selections),
+            "started_at": combined.get("started_at"),
+            "p95_active_ms": p95,
+            "success_rate": stats.get("success_rate"),
+            "journeys": stats.get("journeys"),
+            "users": combined.get("users"),
+            "labeled_at": _utc_now(),
+        }
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO baselines (flow, payload) VALUES (?, ?)
+                   ON CONFLICT(flow) DO UPDATE SET payload=excluded.payload""",
+                (flow, json.dumps(record)),
+            )
+            self._conn.commit()
+        return {"ok": True, "baseline": record, "baselines": self.list_baselines()}
+
+    def _with_baseline(self, stats: dict, flow: Optional[str],
+                       selections: List[tuple]) -> dict:
+        base = self.baseline_for_flow(flow)
+        if not base or not stats:
+            return stats
+        current = ((stats.get("active_ms") or {}).get("percentiles") or {}).get("p95")
+        same = _runs_key(selections) == (
+            base.get("runs_key") or _runs_key(_parse_runs(",".join(base.get("runs") or [])))
+        )
+        info = dict(base)
+        info["is_self"] = same
+        if current is not None and base.get("p95_active_ms") is not None and not same:
+            delta = current - base["p95_active_ms"]
+            info["delta_p95_ms"] = round(delta, 3)
+            if base["p95_active_ms"]:
+                info["delta_pct"] = round(delta / base["p95_active_ms"], 4)
+        stats = dict(stats)
+        stats["baseline"] = info
+        return stats
