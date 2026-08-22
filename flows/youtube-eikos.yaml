@@ -3,12 +3,17 @@
 # Entra al canal, abre el primer video de la pestaña Videos y lo deja
 # reproducir 1 minuto. Validá ANTES de una rampa:
 #
-#   ./venv/bin/python runner.py --users 1 --duration 1s --headed \
+# En el servidor (sin pantalla): SIN --headed
+#   ./venv/bin/python runner.py --users 1 --duration 1s \
 #       --flow flows/youtube-eikos.yaml
 #
-# --duration 1s igual deja terminar el journey en curso (~1 min de wait).
-# Sin --headed corre headless; YouTube a veces pide login o “no soy un bot”.
-# Si pasa, usá --headed la primera vez o --storage-state después de un login.
+# --headed solo en tu notebook, o en el VPS con xvfb:
+#   xvfb-run -a ./venv/bin/python runner.py --users 1 --duration 1s --headed \
+#       --flow flows/youtube-eikos.yaml
+#
+# --duration 1s igual deja terminar el journey (~1 min de wait).
+# YouTube a veces pide login o “no soy un bot”. Si pasa, grabá sesión
+# con --storage-state (en una máquina con pantalla) y copiá el JSON.
 #
 name: "YouTube — canal @eikos-x7h"
 description: >
