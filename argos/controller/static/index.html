@@ -104,6 +104,11 @@
   .neck.base-ok .h{color:var(--ok)}
   .neck.base-bad{border-left-color:var(--bad)}
   .neck.base-bad .h{color:var(--bad)}
+  .sut-box{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    padding:16px 20px}
+  .sut-box .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  .sut-box input[type=file]{font:inherit;font-size:13px}
+  .sut-box pre{background:#f5f8fd;border-radius:8px;padding:10px 12px;overflow:auto;font-size:12px}
   .shots{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
   .pair{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:12px 0}
   .pair .shot img{height:220px;object-fit:cover;object-position:top}
@@ -342,6 +347,7 @@
     <p class="muted" id="detail-sub"></p>
     <div id="detail-kpis" class="kpis"></div>
     <div id="detail-neck"></div>
+    <div id="detail-sut" style="margin-bottom:22px"></div>
     <div class="grid" id="detail-charts"
          style="grid-template-columns:repeat(auto-fit,minmax(430px,1fr));margin-bottom:14px"></div>
     <div id="chart-inspect" class="inspect hidden"></div>
@@ -1567,6 +1573,34 @@ function renderCharts(stats){
     ));
   }
 
+  const sut = stats.access_log || {};
+  const sutCodes = Object.entries(sut.http_status || {}).sort((a,b) => b[1]-a[1]);
+  if(sutCodes.length){
+    cards.push(chartCard(
+      "Códigos HTTP del sitio (access.log)",
+      `${nf.format(sut.tagged || 0)} requests con X-Argos-Run · ${nf.format(sut.http_5xx || 0)} de 5xx · ${nf.format(sut.http_4xx || 0)} de 4xx. Lo que registró nginx, no Playwright.`,
+      barChart(sutCodes.map(([k,v]) => ({
+        label: "HTTP " + k,
+        value: v,
+        color: Number(k) >= 400 ? "#dc3545" : "#1263f5",
+        text: nf.format(v)
+      })))
+    ));
+    const probes = Object.entries(sut.by_probe || {});
+    if(probes.length){
+      cards.push(chartCard(
+        "Requests ARGOS por sonda (access.log)",
+        "Hits con X-Argos-Probe. Si una sonda concentra los 5xx, el sitio falla para ese usuario.",
+        barChart(probes.map(([k,b]) => ({
+          label: k,
+          value: b.hits || 0,
+          color: b.http_5xx ? "#dc3545" : "#1263f5",
+          text: `${nf.format(b.hits || 0)} · ${nf.format(b.http_5xx || 0)} 5xx`
+        })))
+      ));
+    }
+  }
+
   const assets = stats.slow_assets || [];
   if(assets.length){
     cards.push(chartCard(
@@ -1807,6 +1841,69 @@ function inspectSamples(samples){
     }).join("") + `</tbody></table>`;
 }
 
+function renderSut(stats){
+  const box = $("detail-sut");
+  if(!box || !current) return;
+  const a = stats.access_log;
+  const upload =
+    `<div class="row">
+      <label class="btn">Adjuntar access.log
+        <input id="sut-file" type="file" accept=".log,.txt,.json,text/plain" style="display:none">
+      </label>
+      <span class="muted" style="margin:0">Nginx · Combined · JSON. Se cruza por X-Argos-Run = ${esc(current.run)}</span>
+    </div>`;
+  if(!a){
+    box.innerHTML = `<div class="sut-box">
+      <h3 style="margin:0 0 6px;text-transform:none;letter-spacing:0;color:var(--ink)">Lo que vio el sitio</h3>
+      <p class="muted" style="margin:0">Todavía no hay access.log. En nginx usá <code>deploy/nginx-argos.conf</code>
+        y subí el archivo de esta corrida. ARGOS filtra las líneas con este run_id.</p>
+      ${upload}
+    </div>`;
+  } else {
+    const rt = a.request_time_ms;
+    const rtTxt = rt ? `p95 ${ms(P(rt,"p95"))}` : "sin $request_time";
+    const probeRows = Object.entries(a.by_probe || {}).map(([k,b]) =>
+      `<tr><td class="l">${esc(k)}</td><td>${nf.format(b.hits || 0)}</td>
+       <td>${nf.format(b.http_4xx || 0)}</td><td>${nf.format(b.http_5xx || 0)}</td></tr>`
+    ).join("");
+    const pathRows = (a.error_paths || []).slice(0, 8).map(row =>
+      `<tr><td class="l">${esc(row.path || "")}</td><td>${nf.format(row.hits || 0)}</td></tr>`
+    ).join("");
+    box.innerHTML = `<div class="sut-box">
+      <h3 style="margin:0 0 6px;text-transform:none;letter-spacing:0;color:var(--ink)">Lo que vio el sitio (access.log)</h3>
+      ${a.reading ? `<p style="margin:0 0 8px">${esc(a.reading)}</p>` : ""}
+      <p class="muted" style="margin:0 0 10px">${nf.format(a.tagged || 0)} requests con este run ·
+        ${nf.format(a.other || 0)} otros · ${nf.format(a.http_5xx || 0)} de 5xx en el sitio ·
+        ${nf.format(a.playwright_5xx || 0)} de 5xx en Playwright · ${rtTxt}</p>
+      ${probeRows ? `<div class="scroll" style="margin:0 0 12px"><table>
+        <thead><tr><th class="l">Sonda</th><th>Hits</th><th>4xx</th><th>5xx</th></tr></thead>
+        <tbody>${probeRows}</tbody></table></div>` : ""}
+      ${pathRows ? `<div class="scroll" style="margin:0 0 12px"><table>
+        <thead><tr><th class="l">Rutas 4xx/5xx</th><th>Hits</th></tr></thead>
+        <tbody>${pathRows}</tbody></table></div>` : ""}
+      ${upload}
+    </div>`;
+  }
+  const input = $("sut-file");
+  if(!input) return;
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if(!file) return;
+    const text = await file.text();
+    const r = await fetch("/api/access-log?run=" + encodeURIComponent(current.run), {
+      method: "POST",
+      headers: {"Content-Type": "text/plain; charset=utf-8"},
+      body: text,
+    });
+    const body = await r.json().catch(() => ({}));
+    if(!r.ok){
+      alert(body.error || "No se pudo adjuntar el log");
+      return;
+    }
+    await loadDetail();
+  };
+}
+
 function renderNeck(stats){
   const parts = [];
   const bl = stats.baseline;
@@ -1918,6 +2015,7 @@ async function loadDetail(){
     $("detail-steps").innerHTML = "";
     $("detail-shots").innerHTML = "";
     $("detail-sondas").innerHTML = "";
+    renderSut(s);
     return;
   }
 
@@ -1945,9 +2043,15 @@ async function loadDetail(){
     kpi("TTFB p95", ms(P(s.ttfb_ms,"p95")), `prom ${ms(s.ttfb_ms && s.ttfb_ms.avg)}`) +
     kpi("Peso DOM", bytes(s.dom_size_bytes && s.dom_size_bytes.avg),
         s.dom_node_count ? `${nf.format(Math.round(s.dom_node_count.avg))} nodos` : null) +
+    (s.access_log
+      ? kpi("5xx del sitio", nf.format(s.access_log.http_5xx || 0),
+            `${nf.format(s.access_log.tagged || 0)} req con X-Argos-Run`,
+            s.access_log.http_5xx ? "bad" : "ok")
+      : "") +
     whenKpis;
 
   renderNeck(s);
+  renderSut(s);
   renderCharts(s);
   $("detail-metrics").innerHTML = metricsTable(s);
   $("detail-resources").innerHTML = resourcesTable(s.resources || []);
@@ -2003,7 +2107,11 @@ const GLOSSARY = [
     {term:"Headers X-Argos-*", aka:"X-Argos-Run · Probe · VU · Instance",
      what:"Cabeceras que cada navegación first-party lleva al sitio, para correlacionar el access.log con la corrida.",
      how:"Se inyectan solo en el documento y en requests del mismo origin del flujo. Los terceros no se etiquetan para no romper CORS.",
-     watch:"En nginx: log_format con $http_x_argos_run. El run_id sale al arrancar el runner."},
+     watch:"En nginx: log_format de deploy/nginx-argos.conf. Subí el access.log en el detalle de la ejecución o con python -m argos.accesslog."},
+    {term:"Access.log del sitio", aka:"sut_log · cruce nginx",
+     what:"El recuento 2xx/4xx/5xx que registró el sitio, filtrado por X-Argos-Run. No es lo mismo que el HTTP de Playwright (solo el documento de open_url).",
+     how:"Adjuntá el log en Live Room o POST /api/access-log. ARGOS parsea Combined, el log_format argos y JSON.",
+     watch:"Si Playwright vio 5xx y el log no, estás leyendo otro virtual host. Si el log tiene 5xx y Playwright no, suele ser un XHR first-party."},
     {term:"Dataset CSV", aka:"{{campo}} · --data",
      what:"Filas de usuarios, SKU o búsquedas. Cada sonda toma una y reemplaza {{campo}} en el YAML.",
      how:"--data users.csv. La sonda N usa la fila (N + iteración) módulo el largo, para no loguear todos con el mismo user.",

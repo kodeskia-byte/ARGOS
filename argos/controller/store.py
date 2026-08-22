@@ -10,6 +10,7 @@ from typing import List, Optional
 LIVE_SECONDS = 180
 DEFAULT_DB = os.environ.get("ARGOS_DB", "data/argos.db")
 
+from argos.accesslog import analyze, annotate, merge as merge_access_logs
 from argos.controller.analytics import analyze_run
 SAFE_NAME = re.compile(r"^[\w.\-]+$")
 RUN_ID_STAMP = re.compile(r"(\d{8})_(\d{6})")
@@ -62,6 +63,8 @@ class Store:
             os.makedirs(directory, exist_ok=True)
         self.evidence_dir = os.path.join(directory, "evidence")
         os.makedirs(self.evidence_dir, exist_ok=True)
+        self.accesslog_dir = os.path.join(directory, "accesslogs")
+        os.makedirs(self.accesslog_dir, exist_ok=True)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -137,12 +140,62 @@ class Store:
                     flow TEXT PRIMARY KEY,
                     payload TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS access_logs (
+                    run_id TEXT PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    lines INTEGER,
+                    tagged INTEGER,
+                    analysis TEXT NOT NULL
+                );
                 """
             )
             cols = {row[1] for row in self._conn.execute("PRAGMA table_info(runs)")}
             if "p95_active_ms" not in cols:
                 self._conn.execute("ALTER TABLE runs ADD COLUMN p95_active_ms REAL")
             self._conn.commit()
+
+    MAX_ACCESS_LOG = 32 * 1024 * 1024
+
+    def save_access_log(self, run_id: str, text: str) -> dict:
+        run_id = (run_id or "").strip()
+        if not run_id:
+            raise ValueError("run_id required")
+        raw = (text or "").encode("utf-8")
+        if len(raw) > self.MAX_ACCESS_LOG:
+            raise ValueError("access.log demasiado grande (máx 32 MB)")
+        analysis = analyze(text or "", run_id=run_id)
+        analysis["uploaded_at"] = _utc_now()
+        safe = self._safe(run_id)
+        if safe:
+            with open(os.path.join(self.accesslog_dir, safe + ".log"), "w", encoding="utf-8") as handle:
+                handle.write(text or "")
+        ts = analysis["uploaded_at"]
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT OR REPLACE INTO access_logs (run_id, ts, lines, tagged, analysis)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (run_id, ts, analysis.get("lines") or 0, analysis.get("tagged") or 0,
+                 json.dumps(analysis)),
+            )
+            self._conn.commit()
+        return analysis
+
+    def get_access_log(self, run_id: str) -> Optional[dict]:
+        if not run_id:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT analysis FROM access_logs WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row["analysis"])
+        except (TypeError, ValueError):
+            return None
 
     def save_heartbeat(self, payload: dict):
         instance_id = payload.get("instance_id") or "unknown"
@@ -514,6 +567,9 @@ class Store:
         detail["stats"] = self._with_baseline(
             analyze_run(detail), detail.get("flow"), [(instance_id, run_id)],
         )
+        log = self.get_access_log(run_id)
+        if log:
+            detail["stats"]["access_log"] = annotate(log, detail["stats"])
         return detail
 
     def compare(self, selections: List[tuple]) -> dict:
@@ -563,6 +619,18 @@ class Store:
         combined["stats"] = self._with_baseline(
             analyze_run(combined), combined.get("flow"), selections,
         )
+        seen = []
+        seen_ids = set()
+        for run in runs:
+            log = (run.get("stats") or {}).get("access_log")
+            rid = run.get("run_id")
+            if not log or rid in seen_ids:
+                continue
+            seen_ids.add(rid)
+            seen.append(log)
+        merged = merge_access_logs(seen)
+        if merged:
+            combined["stats"]["access_log"] = annotate(merged, combined["stats"])
         return {"runs": runs, "combined": combined}
 
     def evidence_file(self, run_id: str, probe_id: str, filename: str) -> Optional[str]:

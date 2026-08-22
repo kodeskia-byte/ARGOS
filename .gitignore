@@ -18,5 +18,9 @@ results/
 # Lista real de servidores (el ejemplo sí se versiona)
 deploy/hosts.txt
 
+# Sesiones grabadas (cookies de login/MFA)
+flows/auth.json
+flows/*-auth.json
+
 # Logs
 *.log

@@ -36,12 +36,25 @@ def make_handler(store: Store):
             self.end_headers()
             self.wfile.write(body)
 
-        def _read_json(self) -> dict:
+        def _read_body(self, max_bytes: int = 32 * 1024 * 1024) -> bytes:
             length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length) if length else b"{}"
+            if length > max_bytes:
+                raise ValueError("payload too large")
+            return self.rfile.read(length) if length else b""
+
+        def _read_json(self) -> dict:
+            raw = self._read_body()
             if not raw:
                 return {}
             return json.loads(raw.decode("utf-8"))
+
+        def _save_access_log(self, run_id, text: str):
+            try:
+                analysis = store.save_access_log(run_id, text)
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            self._json(200, {"ok": True, "access_log": analysis})
 
         def _serve_file(self, path: str, content_type: str, head_only: bool = False):
             if not os.path.isfile(path):
@@ -187,28 +200,60 @@ def make_handler(store: Store):
 
         def do_POST(self):
             parsed = urlparse(self.path)
-            if parsed.path.startswith("/ingest/") and not self._check_token():
+            path = parsed.path
+            query = parse_qs(parsed.query)
+
+            if path in ("/ingest/access-log", "/api/access-log"):
+                if path.startswith("/ingest/") and not self._check_token():
+                    return
+                try:
+                    raw = self._read_body()
+                except ValueError as exc:
+                    self._json(413, {"error": str(exc)})
+                    return
+                run_id = (query.get("run") or [None])[0]
+                ctype = (self.headers.get("Content-Type") or "").lower()
+                if "json" in ctype:
+                    try:
+                        payload = json.loads(raw.decode("utf-8") or "{}")
+                    except json.JSONDecodeError:
+                        self._json(400, {"error": "invalid json"})
+                        return
+                    run_id = payload.get("run_id") or payload.get("run") or run_id
+                    text = payload.get("log") or payload.get("text") or ""
+                else:
+                    text = raw.decode("utf-8", errors="replace")
+                if not run_id:
+                    self._json(400, {"error": "run required"})
+                    return
+                self._save_access_log(run_id, text)
+                return
+
+            if path.startswith("/ingest/") and not self._check_token():
                 return
             try:
                 payload = self._read_json()
+            except ValueError as exc:
+                self._json(413, {"error": str(exc)})
+                return
             except json.JSONDecodeError:
                 self._json(400, {"error": "invalid json"})
                 return
-            if parsed.path == "/api/baseline":
+            if path == "/api/baseline":
                 try:
                     self._json(200, store.set_baseline(payload))
                 except ValueError as exc:
                     self._json(400, {"error": str(exc)})
                 return
-            if parsed.path == "/ingest/heartbeat":
+            if path == "/ingest/heartbeat":
                 store.save_heartbeat(payload)
                 self._json(200, {"ok": True})
                 return
-            if parsed.path == "/ingest/summary":
+            if path == "/ingest/summary":
                 store.save_summary(payload)
                 self._json(200, {"ok": True})
                 return
-            if parsed.path == "/ingest/results":
+            if path == "/ingest/results":
                 store.save_results(payload)
                 self._json(200, {"ok": True})
                 return

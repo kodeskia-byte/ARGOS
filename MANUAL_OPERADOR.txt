@@ -157,9 +157,26 @@ ahí y te sale un error de argumentos.
 -------------------------------------------------------------------------------
 
 Un flujo es la receta que repite cada sonda. Vive en flows/. El archivo
-comentado de cabo a rabo (cómo se escribe, usuarios, CSV, SLA, las cinco
-acciones) es flows/tutorial.yaml. Copialo a flows/mio.yaml y cambia las
-URLs. example.yaml es el journey corto de Zentriks para corridas reales.
+comentado de cabo a rabo (cómo se escribe, usuarios, CSV, SLA, las acciones)
+es flows/tutorial.yaml. Copialo a flows/mio.yaml y cambia las URLs.
+example.yaml es el journey corto de Zentriks para corridas reales.
+
+La forma más rápida de armar un flujo nuevo es grabarlo:
+
+    ./venv/bin/python -m argos.record --url https://www.ejemplo.cl/ --out flows/mio.yaml
+
+Se abre Chromium. Recorré el sitio. Enter en la terminal guarda el YAML.
+Después revisá selectores, agregá assert y dejá los wait en rango.
+Validá con --users 1 --duration 1s --headed.
+
+Si el sitio pide login o MFA, NO intentes tipear el código SMS en el YAML.
+Grabá la sesión una vez y reutilizala en la carga:
+
+    ./venv/bin/python -m argos.record --url https://app.ejemplo.cl/login \
+        --storage-state flows/auth.json --auth-only
+
+    ./venv/bin/python runner.py --flow flows/mio.yaml \
+        --storage-state flows/auth.json --users 10 --duration 5m
 
 Forma mínima:
 
@@ -176,26 +193,40 @@ Forma mínima:
 
 CAMPOS DE UN PASO
 
-    action        Obligatorio. Uno de: open_url, click, input, assert, wait
-    value         El dato del paso. URL para open_url, texto para input,
-                  milisegundos para wait.
+    action        Obligatorio. Ver lista más abajo.
+    value         El dato del paso. URL, texto, tecla, ruta de archivo, etc.
     selector      Selector CSS del elemento. Ej: 'a[href="/contacto"]'
     xpath         Alternativa al selector, en XPath.
+    frame         CSS del iframe si el elemento vive adentro. El resto del
+                  paso (selector/xpath) se busca DENTRO de ese frame.
     timeout       Milisegundos antes de dar el paso por fallido. Default 30000.
-    description   Texto que aparece en el dashboard, en los gráficos y en el
-                  PDF. ESCRÍBELO SIEMPRE. Sin descripción, el informe dice
-                  "click" y el cliente no entiende nada; con descripción dice
-                  "Ir a Contacto".
+    description   Texto del informe. ESCRÍBELO SIEMPRE.
 
-LAS CINCO ACCIONES
+ACCIONES
 
-    open_url      Navega a value. Espera hasta domcontentloaded, no hasta que
-                  termine de cargar todo.
-    click         Hace click en el elemento de selector o xpath.
-    input         Escribe value dentro del elemento de selector o xpath.
-    assert        Espera a que el elemento esté VISIBLE. Es tu validación: si
-                  el elemento no aparece dentro del timeout, el paso falla.
-    wait          Pausa. No toca el navegador.
+    open_url      Navega a value. Espera hasta domcontentloaded.
+    click         Click en selector o xpath.
+    input         Escribe value en el campo.
+    assert        Espera a que el elemento esté VISIBLE. Tu validación.
+    wait          Pausa / think time. Preferí "4000-9000", no un número fijo.
+    select        Elige una <option>. value es el value del option, o
+                  label:Texto visible  o  index:0
+    hover         Pasa el mouse (menús que solo aparecen al hover).
+    scroll        Con selector: trae el elemento a la vista. Sin selector:
+                  value top | bottom | o píxeles (ej. 800).
+    press         Tecla. value: Enter, Tab, Escape, Control+A. Con selector
+                  enfoca el campo primero.
+    upload        Sube un archivo. value es la ruta local. El selector es
+                  el input type=file (puede estar hidden).
+    wait_url      Espera a que la URL cambie. value: fragmento (checkout),
+                  glob (**/ok) o regex:^https://.+
+    check         Marca un checkbox. value off / uncheck lo destilda.
+
+    --storage-state FILE.json
+                  Cookies y localStorage de un login previo. Las sondas
+                  arrancan ya autenticadas. No limpia la sesión entre
+                  journeys (el recycle de context cada 20 vueltas sí carga
+                  el JSON de nuevo).
 
 EL THINK TIME (la parte que casi todos hacen mal)
 
@@ -270,6 +301,9 @@ los pasos. Es la forma más rápida de descubrir que un selector cambió.
     --abort-grace 60         Segundos de gracia antes de poder abortar. Default 60.
     --data CSV               Dataset: una fila por usuario. Sustituye {{campo}}
                              en value, xpath, selector y description del YAML.
+    --storage-state JSON     Sesión Playwright (cookies). Login/MFA grabados
+                             con argos.record --auth-only. Las sondas arrancan
+                             autenticadas.
     --run-id ID              Id compartido de la corrida. Default: run_YYYYMMDD_HHMMSS.
                              Lo usa fleet.sh para que 10 servidores sean UNA carga.
     --output DIR             Dónde guardar. Default: results
@@ -311,7 +345,7 @@ Al terminar imprime SLA PASS o SLA FAIL y sale con código 1 si falló el
 umbral, 2 si abortó a mitad. Sin bloque sla, el código de salida es 0
 salvo abort.
 
-Sobre correlación con el access.log del sitio (Sprint 2): cada navegación
+Sobre correlación con el access.log del sitio: cada navegación
 first-party lleva headers:
 
     X-Argos-Run: run_YYYYMMDD_HHMMSS
@@ -320,10 +354,22 @@ first-party lleva headers:
     X-Argos-Instance: gen-01
 
 No se etiquetan requests a terceros (analytics, CDN ajeno) para no
-disparar CORS. En nginx:
+disparar CORS. En nginx, include de deploy/nginx-argos.conf:
 
-    log_format argos '$remote_addr $status $http_x_argos_run '
-                     '$http_x_argos_probe $request';
+    access_log /var/log/nginx/argos.access.log argos;
+
+Después de la corrida, cruzá ese log con el informe (una vez por run_id,
+vale para todos los generadores de esa carga):
+
+    ./venv/bin/python -m argos.accesslog --file argos.access.log \
+        --run run_YYYYMMDD_HHMMSS --controller-url http://127.0.0.1:8080
+
+O en Live Room → detalle de la ejecución → Adjuntar access.log.
+
+El informe muestra hits etiquetados, 4xx/5xx del SITIO (no solo el
+documento de Playwright), recuento por sonda y por generador, y avisa
+si Playwright vio 5xx y nginx no (otro virtual host) o al revés (un
+XHR first-party que open_url no cuenta).
 
 El FAIL de un open_url ahora distingue HTTP 502 de un timeout de
 Playwright o de un selector que no apareció. El informe cuenta 4xx/5xx
@@ -906,25 +952,39 @@ Mira el dashboard. Tienen que aparecer las 10 tarjetas con 0% de error. Si hay
 errores AHORA, sin carga, el problema es tu flujo, no el sitio. Arréglalo antes
 de seguir.
 
-PASO 4 - LA PRUEBA REAL, ARRANCANDO TODOS A LA MISMA HORA
+PASO 4 - LA PRUEBA REAL, UN COMANDO DESDE EL NOTEBOOK
 
-Copiá deploy/hosts.example.txt a deploy/hosts.txt (una línea user@ip por
-generador). fleet.sh hace el pull, mira el desfase NTP, comparte UN run_id
-y lanza el mismo --ramp en todos:
+El caso habitual: collector en tu PC (127.0.0.1:8080), generadores por
+SSH, túnel reverso para que cada servidor vea el collector en
+localhost:8080. Copiá deploy/hosts.example.txt a deploy/hosts.txt.
 
-    export ARGOS_CONTROLLER_URL=http://IP_COLLECTOR:8080
-    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --check
-
-    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --lite \
+    ./deploy/up.sh --hosts deploy/hosts.txt --lite \
         --ramp 10@2m,50@5m,100@5m \
         --flow flows/example.yaml \
         --at 18:30:00
 
+Eso, en este orden: levanta el collector si no está, abre un ssh -R 8080
+por generador, git pull, mira NTP, comparte UN run_id y lanza el mismo
+--ramp. Dashboard: http://127.0.0.1:8080
+
 --at usa el reloj de CADA servidor (NTP). Dale 2-3 minutos de margen.
 Sin --at arrancan en cuanto el ssh termina, en paralelo.
+--no-pull si no querés actualizar el repo. --observe agrega el túnel
+5080 de OpenObserve. --data users.csv copia el CSV a cada máquina.
 
-Con --data users.csv copia el CSV a cada máquina. Para cortar:
+Para cortar runners y túneles (el collector sigue para el informe):
 
+    ./deploy/up.sh --hosts deploy/hosts.txt --down
+
+Si el collector ya corre en un VPS con IP pública, no hace falta el
+túnel. Ahí sigue valiendo fleet.sh directo:
+
+    export ARGOS_CONTROLLER_URL=http://IP_COLLECTOR:8080
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --check
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --lite \
+        --ramp 10@2m,50@5m,100@5m \
+        --flow flows/example.yaml \
+        --at 18:30:00
     ./deploy/fleet.sh --hosts deploy/hosts.txt --stop
 
 El run_id compartido hace que el dashboard vea UNA carga aunque los
@@ -947,7 +1007,7 @@ Lo que tienes que vigilar, en este orden:
 
 Si necesitas cortar todo de emergencia:
 
-    ./deploy/fleet.sh --hosts deploy/hosts.txt --stop
+    ./deploy/up.sh --hosts deploy/hosts.txt --down
 
 PASO 6 - RECOGER LOS RESULTADOS
 
@@ -1200,9 +1260,12 @@ El runner demora más que el --duration que le pedí
 Excel del operador (SSH, instalar, un comando por gen-01…gen-10):
 
     deploy/comandos-operador.xlsx
+    deploy/comandos-ficticio.xlsx         10 gens de ejemplo (IP 10.80.1.11–20)
 
 Completá la hoja "1. Config" y las IP en "2. Generadores". Después copiá
-la celda de "6. Lanzar RAMPA". Si cambian las IP, regenerá el archivo:
+la celda de "6. Lanzar RAMPA". El ficticio ya trae las 10 filas armadas
+para ensayar el procedimiento (no conectan: son IP de laboratorio).
+Si cambian las IP, regenerá:
 
     ./venv/bin/python deploy/build_comandos_xlsx.py
 
@@ -1220,7 +1283,31 @@ COLLECTOR
     sudo journalctl -u argos-collector -f
     fuser -k 8080/tcp                       Libera el puerto
 
+FLOTA (un comando desde el notebook)
+    ./deploy/up.sh --hosts deploy/hosts.txt --lite \
+        --ramp 5@1m,15@3m --flow flows/example.yaml
+    ./deploy/up.sh --hosts deploy/hosts.txt --down
+    ./deploy/up.sh --hosts deploy/hosts.txt --observe --lite \
+        --ramp 5@1m --flow flows/example.yaml
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --check
+    ./deploy/fleet.sh --hosts deploy/hosts.txt --stop
+
+ACCESS.LOG DEL SITIO (cruzar X-Argos-Run en el informe)
+    ./venv/bin/python -m argos.accesslog --file access.log \
+        --run run_YYYYMMDD_HHMMSS --controller-url http://127.0.0.1:8080
+    ./venv/bin/python -m argos.accesslog --self-test
+
 EJECUTAR CARGA
+    # grabar un flujo (se abre Chromium; Enter guarda)
+    ./venv/bin/python -m argos.record --url https://www.ejemplo.cl/ \
+        --out flows/mio.yaml
+
+    # login / MFA: guardar sesión, no el código SMS
+    ./venv/bin/python -m argos.record --url https://app.ejemplo.cl/login \
+        --storage-state flows/auth.json --auth-only
+    ./venv/bin/python runner.py --flow flows/mio.yaml \
+        --storage-state flows/auth.json --users 1 --duration 1s --headed
+
     # validar el flujo
     ./venv/bin/python runner.py --users 1 --duration 1s \
         --flow flows/example.yaml
@@ -1260,6 +1347,8 @@ CONSULTAS AL COLLECTOR
         | python3 -m json.tool
     curl -s "http://IP:8080/api/reports?date=2026-08-17" | python3 -m json.tool
     curl -o informe.pdf "http://IP:8080/informe.pdf?instance=gen-01&run=RUN_ID"
+    curl -s --data-binary @access.log \
+        "http://127.0.0.1:8080/api/access-log?run=RUN_ID"
 
 EN EL NAVEGADOR
     http://IP:8080                                      Dashboard
@@ -1679,7 +1768,14 @@ PASO 1 — PC: levantar OpenObserve
 
 PASO 2 — PC: túnel (collector 8080 + OpenObserve 5080)
 
-    Si ya tenías el túnel del 8080, cerralo y usá este, que lleva los dos:
+    Si arrancás la flota con up.sh, agregá --observe y no hace falta este
+    ssh a mano:
+
+        ./deploy/up.sh --hosts deploy/hosts.txt --observe --lite \
+            --ramp 5@1m --flow flows/example.yaml
+
+    Si ya tenías el túnel del 8080 solo, cerralo y usá este, que lleva
+    los dos:
 
         ssh -N -R 8080:127.0.0.1:8080 -R 5080:127.0.0.1:5080 root@216.185.51.83
 

@@ -84,13 +84,27 @@
 #      Si un selector está mal, vas a ver el FAIL y el pantallazo en results/.
 #
 #
-# 4) LAS CINCO ACCIONES (resumen)
+# 4) ACCIONES (resumen)
 # -------------------------------
 #   open_url  Navega a value. Espera domcontentloaded, no a que cargue todo.
 #   click     Click en selector o xpath.
 #   input     Escribe value en el campo (login, búsqueda, formulario).
 #   assert    Espera a que el elemento esté VISIBLE. Si no aparece → FAIL.
 #   wait      Pausa. "5000" = 5 s fijos. "4000-9000" = sorteo (USÁ ESTE).
+#   select    <option>. value, o label:Texto, o index:0
+#   hover     Mouse sobre el elemento (menús).
+#   scroll    Con selector: trae a la vista. Sin: top | bottom | píxeles.
+#   press     Tecla (Enter, Tab). Con selector enfoca el campo.
+#   upload    Archivo local en un input type=file.
+#   wait_url  Espera a que la URL contenga value.
+#   check     Checkbox. value off lo destilda.
+#   frame:    Campo extra: CSS del iframe; el selector se busca adentro.
+#
+# Grabar en vez de copiar F12:
+#   ./venv/bin/python -m argos.record --url https://tu-sitio.cl/ --out flows/mio.yaml
+# MFA / login difícil:
+#   ./venv/bin/python -m argos.record --url URL --storage-state flows/auth.json --auth-only
+#   ./venv/bin/python runner.py --flow flows/mio.yaml --storage-state flows/auth.json
 #
 # Si un paso falla: PNG + HTML en results/, el journey se CORTA, la sonda
 # arranca de cero. Por eso los pasos del final tienen menos muestras.
@@ -237,4 +251,30 @@ steps:
 # {{usuario}} {{clave}} {{sku}} {{sucursal}} tienen que existir como
 # COLUMNAS en el CSV (cabecera de la primera línea). Si el YAML pide un
 # campo que el CSV no tiene, el runner corta al arrancar.
+#
+# Iframe, select, scroll, tecla, archivo, esperar URL:
+#
+#   - action: select
+#     selector: "#region"
+#     value: "label:Santiago"
+#     description: "Elegir región"
+#   - action: hover
+#     selector: "nav .cuenta"
+#     description: "Abrir menú de cuenta"
+#   - action: click
+#     selector: "#pay-button"
+#     frame: "iframe[name=pasarela]"
+#     description: "Pagar dentro del iframe"
+#   - action: wait_url
+#     value: "checkout/ok"
+#     timeout: 20000
+#     description: "Llegó a la página de éxito"
+#   - action: press
+#     selector: "#q"
+#     value: "Enter"
+#     description: "Buscar"
+#   - action: upload
+#     selector: "input[type=file]"
+#     value: "fixtures/boleta.pdf"
+#     description: "Adjuntar boleta"
 # =============================================================================

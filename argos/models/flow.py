@@ -9,6 +9,13 @@ class ActionType(str, Enum):
     INPUT = "input"
     ASSERT = "assert"
     WAIT = "wait"
+    SELECT = "select"
+    HOVER = "hover"
+    SCROLL = "scroll"
+    PRESS = "press"
+    UPLOAD = "upload"
+    WAIT_URL = "wait_url"
+    CHECK = "check"
 
 
 class Step(BaseModel):
@@ -18,6 +25,7 @@ class Step(BaseModel):
     value: Optional[str] = None
     description: Optional[str] = None
     timeout: Optional[int] = 30000
+    frame: Optional[str] = None
 
 
 class SLA(BaseModel):

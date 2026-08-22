@@ -554,5 +554,246 @@ def build():
     print(OUT)
 
 
+FICTICIO_OUT = "deploy/comandos-ficticio.xlsx"
+FICTICIO_IPS = [f"10.80.1.{10 + i}" for i in range(1, 11)]
+
+
+def _fleet():
+    rows = []
+    for i in range(1, 11):
+        ip = FICTICIO_IPS[i - 1]
+        rows.append({
+            "n": i,
+            "instance_id": f"gen-{i:02d}",
+            "code": f"ZL-G{i:02d}",
+            "host": f"digital-{i:02d}",
+            "ip": ip,
+            "ssh": f"root@{ip}",
+        })
+    return rows
+
+
+def _ramp_line(instance_id):
+    return (
+        f"cd ~/ARGOS && nohup ./venv/bin/python runner.py "
+        f"--flow flows/example.yaml --ramp 5@1m,15@3m,30@5m "
+        f"--abort-error 0.4 --abort-cpu 90 "
+        f"--controller-url http://127.0.0.1:8080 "
+        f"--instance-id {instance_id} --lite > carga.log 2>&1 &"
+    )
+
+
+def build_ficticio():
+    """Excel de demostración: 10 generadores con IP de ejemplo y celdas para copiar."""
+    wb = Workbook()
+    fleet = _fleet()
+
+    how = wb.active
+    how.title = "0. LEEME"
+    how.sheet_properties.tabColor = "DC3545"
+    how.merge_cells("A1:B1")
+    paint(how, 1, 1, "FICTICIO · no conectes a estas IP · son de ejemplo para el operador", TITLE_FONT, WARN_FILL)
+    how["B1"].border = THIN
+    how.row_dimensions[1].height = 28
+    how.merge_cells("A2:B2")
+    paint(
+        how, 2, 1,
+        "Generador = una máquina con IP (gen-01). Sonda = un Chromium adentro (probe-01). "
+        "Vos pegás UN comando por generador; ARGOS abre las sondas solo. "
+        "Celdas amarillas = copiá y pegá en la terminal.",
+        SUB_FONT, TITLE_FILL, TOP,
+    )
+    how["B2"].border = THIN
+    how.row_dimensions[2].height = 48
+    for i, h in enumerate(["Hoja", "Para qué"], 1):
+        paint(how, 4, i, h)
+    style_header(how, 4, 2)
+    guide = [
+        ("1. Flota de 10", "Las 10 máquinas: IP, instance_id, código Z-Load y comandos listos."),
+        ("2. Sondas internas", "Cómo se llaman las 10 sondas DENTRO de gen-01 (no tienen IP propia)."),
+        ("3. hosts.txt", "Pegá esto en deploy/hosts.txt cuando las IP sean reales."),
+        ("4. En la PC", "Collector + un túnel por generador (también ficticios)."),
+    ]
+    for i, (a, b) in enumerate(guide, 5):
+        paint(how, i, 1, a, Font(name="Calibri", bold=True, size=11), OK_FILL)
+        paint(how, i, 2, b)
+        how.row_dimensions[i].height = 22
+    widths(how, [24, 110])
+    how.freeze_panes = "A5"
+
+    flota = wb.create_sheet("1. Flota de 10")
+    flota.sheet_properties.tabColor = BLUE
+    flota.merge_cells("A1:J1")
+    paint(
+        flota, 1, 1,
+        "Una fila = un SERVIDOR. Copiá la celda amarilla y pegala en la terminal de ESA máquina. "
+        "El instance_id ya va distinto: si dos filas dicen gen-01, el informe se mezcla.",
+        TITLE_FONT, TITLE_FILL, TOP,
+    )
+    for col in range(2, 11):
+        flota.cell(1, col).border = THIN
+        flota.cell(1, col).fill = TITLE_FILL
+    flota.row_dimensions[1].height = 40
+    headers = [
+        "#", "instance_id", "código Z-Load", "hostname", "IP",
+        "ssh_destino", "1. Conectar", "2. git pull", "3. Lanzar RAMPA", "4. Ver log / cortar",
+    ]
+    for i, h in enumerate(headers, 1):
+        paint(flota, 3, i, h)
+    style_header(flota, 3, 10)
+    flota.row_dimensions[3].height = 28
+    for g in fleet:
+        r = 3 + g["n"]
+        paint(flota, r, 1, g["n"])
+        paint(flota, r, 2, g["instance_id"], Font(name="Consolas", bold=True, size=12), OK_FILL)
+        paint(flota, r, 3, g["code"], Font(name="Consolas", bold=True, size=12), OK_FILL)
+        paint(flota, r, 4, g["host"], MONO)
+        paint(flota, r, 5, g["ip"], MONO, WARN_FILL)
+        paint(flota, r, 6, g["ssh"], MONO, WARN_FILL)
+        paint(flota, r, 7, f"ssh -o StrictHostKeyChecking=accept-new {g['ssh']}", MONO, WARN_FILL, TOP)
+        paint(flota, r, 8, "cd ~/ARGOS && git pull", MONO, WARN_FILL)
+        paint(flota, r, 9, _ramp_line(g["instance_id"]), MONO, WARN_FILL, TOP)
+        paint(
+            flota, r, 10,
+            "tail -f ~/ARGOS/carga.log\npkill -f runner.py",
+            MONO, WARN_FILL, TOP,
+        )
+        flota.row_dimensions[r].height = 56
+    widths(flota, [5, 14, 16, 14, 16, 22, 48, 26, 88, 32])
+    flota.freeze_panes = "A4"
+    paint(
+        flota, 15, 1,
+        "IPs 10.80.1.11–20 son de laboratorio. Cuando tengas las reales, cambiá la columna IP "
+        "y volvé a generar este archivo, o usá deploy/comandos-operador.xlsx (el de producción).",
+        SUB_FONT, TITLE_FILL, TOP,
+    )
+    flota.merge_cells("A15:J15")
+    for col in range(2, 11):
+        flota.cell(15, col).border = THIN
+        flota.cell(15, col).fill = TITLE_FILL
+    flota.row_dimensions[15].height = 36
+
+    sondas = wb.create_sheet("2. Sondas internas")
+    sondas.sheet_properties.tabColor = "0F9D58"
+    sondas.merge_cells("A1:F1")
+    paint(
+        sondas, 1, 1,
+        "Ejemplo: 10 sondas DENTRO de gen-01 (10.80.1.11). No se les hace SSH. "
+        "ARGOS las abre con --users 10 (o la rampa). El código sale en el Live Room.",
+        TITLE_FONT, TITLE_FILL, TOP,
+    )
+    for col in range(2, 7):
+        sondas.cell(1, col).border = THIN
+        sondas.cell(1, col).fill = TITLE_FILL
+    sondas.row_dimensions[1].height = 40
+    for i, h in enumerate(
+        ["#", "probe_id", "código Z-Load", "vive en", "IP (la del generador)", "Qué hace"], 1
+    ):
+        paint(sondas, 3, i, h)
+    style_header(sondas, 3, 6)
+    for i in range(1, 11):
+        r = 3 + i
+        paint(sondas, r, 1, i)
+        paint(sondas, r, 2, f"probe-{i:02d}", Font(name="Consolas", bold=True, size=11), OK_FILL)
+        paint(sondas, r, 3, f"ZL-G01-P{i:02d}", Font(name="Consolas", bold=True, size=12), OK_FILL)
+        paint(sondas, r, 4, "gen-01", MONO)
+        paint(sondas, r, 5, "10.80.1.11", MONO)
+        paint(
+            sondas, r, 6,
+            "Un context de Chromium. Repite el YAML. No tiene IP propia.",
+        )
+        sondas.row_dimensions[r].height = 22
+    widths(sondas, [6, 14, 18, 12, 24, 70])
+    sondas.freeze_panes = "A4"
+    paint(
+        sondas, 15, 1,
+        "En gen-02 las sondas se llaman igual (probe-01…) pero el código es ZL-G02-P01. "
+        "Por eso el comando lleva --instance-id gen-02: para no mezclarlas en el informe.",
+        SUB_FONT, TITLE_FILL, TOP,
+    )
+    sondas.merge_cells("A15:F15")
+    for col in range(2, 7):
+        sondas.cell(15, col).border = THIN
+        sondas.cell(15, col).fill = TITLE_FILL
+    sondas.row_dimensions[15].height = 36
+
+    hosts = wb.create_sheet("3. hosts.txt")
+    hosts.sheet_properties.tabColor = "E8A33D"
+    hosts.merge_cells("A1:B1")
+    paint(hosts, 1, 1, "Pegá la columna B en deploy/hosts.txt (una línea por generador)", TITLE_FONT, TITLE_FILL)
+    hosts["B1"].border = THIN
+    hosts.row_dimensions[1].height = 28
+    for i, h in enumerate(["instance_id", "línea para hosts.txt"], 1):
+        paint(hosts, 3, i, h)
+    style_header(hosts, 3, 2)
+    for g in fleet:
+        r = 3 + g["n"]
+        paint(hosts, r, 1, g["instance_id"], Font(name="Consolas", bold=True, size=11), OK_FILL)
+        paint(hosts, r, 2, f"{g['ssh']} {g['instance_id']}", MONO, WARN_FILL)
+        hosts.row_dimensions[r].height = 22
+    widths(hosts, [16, 42])
+    hosts.freeze_panes = "A4"
+    paint(
+        hosts, 15, 1,
+        "Desde la PC, cuando las IP sean reales:\n"
+        "./deploy/fleet.sh --hosts deploy/hosts.txt --check\n"
+        "./deploy/fleet.sh --hosts deploy/hosts.txt --pull --flow flows/example.yaml "
+        "--ramp 5@1m,15@3m,30@5m --abort-error 0.4 --abort-cpu 90 --lite",
+        MONO, OK_FILL, TOP,
+    )
+    hosts.merge_cells("A15:B15")
+    hosts["B15"].border = THIN
+    hosts.row_dimensions[15].height = 64
+
+    pc = wb.create_sheet("4. En la PC")
+    pc.sheet_properties.tabColor = "0F9D58"
+    pc.merge_cells("A1:C1")
+    paint(pc, 1, 1, "En TU notebook. El collector no corre en los 10 servidores.", TITLE_FONT, TITLE_FILL)
+    pc["B1"].border = THIN
+    pc["C1"].border = THIN
+    pc.row_dimensions[1].height = 28
+    for i, h in enumerate(["Paso", "Dónde", "Comando (copiá la celda)"], 1):
+        paint(pc, 3, i, h)
+    style_header(pc, 3, 3)
+    pc_rows = [
+        ("0. Collector", "PC · terminal 1",
+         "cd ~/Música/ARGOS && ./venv/bin/python -m argos.controller.server --host 127.0.0.1 --port 8080"),
+        ("0b. Si 8080 ocupado", "PC", "fuser -k 8080/tcp"),
+        ("Dashboard", "Navegador", "http://127.0.0.1:8080"),
+    ]
+    r = 4
+    for paso, donde, cmd in pc_rows:
+        paint(pc, r, 1, paso)
+        paint(pc, r, 2, donde)
+        paint(pc, r, 3, cmd, MONO, OK_FILL, TOP)
+        pc.row_dimensions[r].height = 28
+        r += 1
+    for g in fleet:
+        paint(pc, r, 1, f"Túnel {g['instance_id']}")
+        paint(pc, r, 2, "PC · una terminal por gen")
+        paint(
+            pc, r, 3,
+            f"ssh -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes "
+            f"-R 8080:127.0.0.1:8080 {g['ssh']}",
+            MONO, WARN_FILL, TOP,
+        )
+        pc.row_dimensions[r].height = 32
+        r += 1
+    widths(pc, [22, 28, 110])
+    pc.freeze_panes = "A4"
+
+    for ws in wb.worksheets:
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_view.showGridLines = False
+        ws.print_title_rows = "1:3"
+
+    wb.save(FICTICIO_OUT)
+    print(FICTICIO_OUT)
+
+
 if __name__ == "__main__":
     build()
+    build_ficticio()

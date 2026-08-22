@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import time
 import os
 import traceback
@@ -72,7 +73,8 @@ class FlowExecutor:
     def __init__(self, probe_id: str, output_dir: str, pool: BrowserPool,
                  probe_index: int = 0, reference: bool = False,
                  slow_step_ms: float = 0, lite: bool = False,
-                 run_id: str = "", instance_id: str = ""):
+                 run_id: str = "", instance_id: str = "",
+                 storage_state: Optional[str] = None):
         self.probe_id = probe_id
         self.output_dir = output_dir
         self.pool = pool
@@ -81,6 +83,7 @@ class FlowExecutor:
         self.lite = lite
         self.run_id = run_id
         self.instance_id = instance_id
+        self.storage_state = storage_state
         self.origin = None
         self._reference_pending = reference
         self._slow_shots = 0
@@ -235,10 +238,11 @@ class FlowExecutor:
         """
         if self._context is not None and self._page is not None:
             try:
-                await self._context.clear_cookies()
-                await self._page.evaluate(
-                    "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"
-                )
+                if not self.storage_state:
+                    await self._context.clear_cookies()
+                    await self._page.evaluate(
+                        "() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }"
+                    )
                 return self._context, self._page
             except Exception:
                 await self.close()
@@ -248,6 +252,7 @@ class FlowExecutor:
             browser,
             header_fn=self._argos_headers,
             origin=self.origin,
+            storage_state=self.storage_state,
         )
         await context.add_init_script(VITALS_SCRIPT)
         page = await context.new_page()
@@ -341,31 +346,107 @@ class FlowExecutor:
             return step.selector
         raise ValueError(f"{step.action.value} action requires xpath or selector")
 
+    def _locator(self, page, step: Step):
+        sel = self._playwright_selector(step)
+        if step.frame:
+            return page.frame_locator(step.frame).locator(sel).first
+        return page.locator(sel).first
+
     async def _execute_step(self, page, step: Step):
+        timeout = step.timeout
         if step.action == ActionType.OPEN_URL:
             response = await page.goto(
-                step.value, timeout=step.timeout, wait_until="domcontentloaded",
+                step.value, timeout=timeout, wait_until="domcontentloaded",
             )
             status = response.status if response is not None else None
             resources = await self._capture_resources(page)
             return {"http_status": status, "resources": resources}
 
         elif step.action == ActionType.CLICK:
-            await page.click(self._playwright_selector(step), timeout=step.timeout)
+            await self._locator(page, step).click(timeout=timeout)
 
         elif step.action == ActionType.INPUT:
-            await page.fill(self._playwright_selector(step), step.value or "", timeout=step.timeout)
+            await self._locator(page, step).fill(step.value or "", timeout=timeout)
 
         elif step.action == ActionType.ASSERT:
-            await page.wait_for_selector(
-                self._playwright_selector(step),
-                state="visible",
-                timeout=step.timeout,
-            )
+            await self._locator(page, step).wait_for(state="visible", timeout=timeout)
 
         elif step.action == ActionType.WAIT:
             await asyncio.sleep(self._think_time(step))
+
+        elif step.action == ActionType.SELECT:
+            await self._locator(page, step).select_option(
+                timeout=timeout, **self._select_option(step.value),
+            )
+
+        elif step.action == ActionType.HOVER:
+            await self._locator(page, step).hover(timeout=timeout)
+
+        elif step.action == ActionType.SCROLL:
+            await self._scroll(page, step)
+
+        elif step.action == ActionType.PRESS:
+            key = (step.value or "Enter").strip()
+            if step.selector or step.xpath:
+                await self._locator(page, step).press(key, timeout=timeout)
+            else:
+                await page.keyboard.press(key)
+
+        elif step.action == ActionType.UPLOAD:
+            path = os.path.abspath(step.value or "")
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"upload: no existe {path}")
+            await self._locator(page, step).set_input_files(path, timeout=timeout)
+
+        elif step.action == ActionType.WAIT_URL:
+            pattern = self._url_pattern(step.value)
+            await page.wait_for_url(pattern, timeout=timeout)
+
+        elif step.action == ActionType.CHECK:
+            loc = self._locator(page, step)
+            off = str(step.value or "").strip().lower() in ("off", "false", "0", "uncheck")
+            if off:
+                await loc.uncheck(timeout=timeout)
+            else:
+                await loc.check(timeout=timeout)
+
+        else:
+            raise ValueError(f"acción no implementada: {step.action}")
         return None
+
+    @staticmethod
+    def _select_option(value: Optional[str]):
+        raw = (value or "").strip()
+        if raw.startswith("label:"):
+            return {"label": raw[6:].strip()}
+        if raw.startswith("index:"):
+            return {"index": int(raw[6:].strip())}
+        return {"value": raw}
+
+    @staticmethod
+    def _url_pattern(value: Optional[str]) -> str:
+        raw = (value or "").strip()
+        if not raw:
+            raise ValueError("wait_url necesita value (glob, regex o fragmento)")
+        if raw.startswith("regex:"):
+            return re.compile(raw[6:])
+        if "*" in raw or raw.startswith("http"):
+            return raw
+        return f"**/*{raw}*"
+
+    async def _scroll(self, page, step: Step):
+        raw = str(step.value or "into").strip().lower()
+        if step.selector or step.xpath:
+            await self._locator(page, step).scroll_into_view_if_needed(
+                timeout=step.timeout,
+            )
+            return
+        if raw in ("bottom", "end"):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        elif raw in ("top", "start", "into"):
+            await page.evaluate("window.scrollTo(0, 0)")
+        else:
+            await page.evaluate("(y) => window.scrollBy(0, y)", float(raw))
 
     @staticmethod
     async def _capture_resources(page) -> Optional[list]:

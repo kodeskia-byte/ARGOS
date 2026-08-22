@@ -336,6 +336,65 @@ def _summary_html(stats: dict) -> str:
             f"<p>{body}</p></section>")
 
 
+def _access_log_html(stats: dict) -> str:
+    sut = stats.get("access_log")
+    if not sut:
+        return """
+    <h2>Lo que vio el sitio (access.log)</h2>
+    <p>Todavía no hay un access.log adjunto a esta corrida. En nginx usá el
+    <code>log_format</code> de <code>deploy/nginx-argos.conf</code> y subí el archivo
+    desde Live Room (detalle de la ejecución) o con:</p>
+    <pre>./venv/bin/python -m argos.accesslog --file access.log --run RUN \\
+        --controller-url http://127.0.0.1:8080</pre>
+    <p>ARGOS cruza las líneas que llevan <code>X-Argos-Run</code> con esta corrida.
+    El resto del tráfico del sitio queda como «otros».</p>"""
+    probe_rows = "".join(
+        f"<tr><td>{e(name)}</td><td>{_count(b.get('hits'))}</td>"
+        f"<td>{_count(b.get('http_4xx'))}</td><td>{_count(b.get('http_5xx'))}</td></tr>"
+        for name, b in (sut.get("by_probe") or {}).items()
+    )
+    inst_rows = "".join(
+        f"<tr><td>{e(name)}</td><td>{_count(b.get('hits'))}</td>"
+        f"<td>{_count(b.get('http_4xx'))}</td><td>{_count(b.get('http_5xx'))}</td></tr>"
+        for name, b in (sut.get("by_instance") or {}).items()
+    )
+    path_rows = "".join(
+        f"<tr><td class='l'>{e(row.get('path') or '')}</td><td>{_count(row.get('hits'))}</td></tr>"
+        for row in (sut.get("error_paths") or [])[:12]
+    )
+    samples = "".join(
+        f"<tr><td>{row.get('status') or ''}</td><td class='l'>{e(row.get('path') or '')}</td>"
+        f"<td>{e(row.get('probe') or '')}</td><td>{e(row.get('instance') or '')}</td></tr>"
+        for row in (sut.get("samples_5xx") or [])[:8]
+    )
+    reading = sut.get("reading")
+    rt = sut.get("request_time_ms") or {}
+    rt_txt = (
+        f"p95 {_ms(_p(rt, 'p95'))} · prom {_ms(rt.get('avg'))}"
+        if rt else "sin $request_time en el log"
+    )
+    return f"""
+    <h2>Lo que vio el sitio (access.log)</h2>
+    <p>Requests del SUT etiquetados con <code>X-Argos-Run</code> {e(sut.get('run_id') or stats.get('run_id') or '')}.
+    Playwright cuenta el documento de cada <code>open_url</code>; este recuento es el access.log
+    completo (también XHR y assets first-party).</p>
+    {f"<p><b>{e(reading)}</b></p>" if reading else ""}
+    <div class="kpis">
+      <div><span>Líneas del log</span><b>{_count(sut.get('lines'))}</b></div>
+      <div><span>Con este run</span><b>{_count(sut.get('tagged'))}</b></div>
+      <div><span>Otros</span><b>{_count(sut.get('other'))}</b></div>
+      <div><span>5xx del sitio</span><b>{_count(sut.get('http_5xx'))}</b></div>
+      <div><span>4xx del sitio</span><b>{_count(sut.get('http_4xx'))}</b></div>
+      <div><span>5xx Playwright</span><b>{_count(sut.get('playwright_5xx'))}</b></div>
+      <div><span>Tiempo de request</span><b>{rt_txt}</b></div>
+    </div>
+    {"<h3>Por sonda</h3><table><thead><tr><th>Sonda</th><th>Hits</th><th>4xx</th><th>5xx</th></tr></thead><tbody>" + probe_rows + "</tbody></table>" if probe_rows else ""}
+    {"<h3>Por generador</h3><table><thead><tr><th>Generador</th><th>Hits</th><th>4xx</th><th>5xx</th></tr></thead><tbody>" + inst_rows + "</tbody></table>" if inst_rows else ""}
+    {"<h3>Rutas con 4xx/5xx</h3><table><thead><tr><th class='l'>Ruta</th><th>Hits</th></tr></thead><tbody>" + path_rows + "</tbody></table>" if path_rows else ""}
+    {"<h3>Muestra de 5xx</h3><table><thead><tr><th>Status</th><th class='l'>Ruta</th><th>Sonda</th><th>Generador</th></tr></thead><tbody>" + samples + "</tbody></table>" if samples else ""}
+    """
+
+
 def _charts_html(stats: dict) -> str:
     flow = stats.get("flow_ms") or {}
     points = stats.get("timeline") or []
@@ -537,6 +596,41 @@ def _charts_html(stats: dict) -> str:
                 "text": _count(count),
             } for code, count in http_codes]),
         ))
+
+    sut = stats.get("access_log") or {}
+    sut_codes = sorted(
+        ((code, count) for code, count in (sut.get("http_status") or {}).items()),
+        key=lambda kv: -kv[1],
+    )
+    if sut_codes:
+        cards.append(charts.card(
+            "Códigos HTTP del sitio (access.log)",
+            f"{_count(sut.get('tagged'))} requests con X-Argos-Run de esta corrida · "
+            f"{_count(sut.get('http_5xx'))} de 5xx · {_count(sut.get('http_4xx'))} de 4xx. "
+            "Es lo que registró nginx, no Playwright.",
+            charts.hbars([{
+                "label": f"HTTP {code}",
+                "value": count,
+                "color": charts.RED if _http_is_error(code) else charts.BLUE,
+                "text": _count(count),
+            } for code, count in sut_codes]),
+        ))
+        sut_probes = [
+            {
+                "label": name,
+                "value": bucket.get("hits") or 0,
+                "color": charts.RED if bucket.get("http_5xx") else charts.BLUE,
+                "text": f"{_count(bucket.get('hits'))} req · {_count(bucket.get('http_5xx'))} 5xx",
+            }
+            for name, bucket in (sut.get("by_probe") or {}).items()
+        ]
+        if sut_probes:
+            cards.append(charts.card(
+                "Requests ARGOS por sonda (access.log)",
+                "Hits etiquetados con X-Argos-Probe. Si una sonda concentra los 5xx, el sitio "
+                "falla para ese usuario, no de forma uniforme.",
+                charts.hbars(sut_probes, label_width=130),
+            ))
 
     assets = stats.get("slow_assets") or []
     if assets:
@@ -867,6 +961,7 @@ def render_compare_html(bundle: dict) -> str:
       <div><span>Apdex</span><b>{f"{stats['apdex']['score']:.2f}" if stats.get('apdex') else '—'}</b></div>
     </div>
     {_charts_html(stats)}
+    {_access_log_html(stats)}
 
     <h2>Métricas consolidadas</h2>
     {_metrics_table_html(stats)}
@@ -1000,6 +1095,7 @@ def render_informe_html(detail: dict) -> str:
     </div>
     <h2>Análisis gráfico</h2>
     {_charts_html(stats)}
+    {_access_log_html(stats)}
     {neck_html}
     <h2>Métricas de carga</h2>
     {_metrics_table_html(stats)}
@@ -1396,6 +1492,55 @@ def build_pdf(detail: dict, evidence_dir: str) -> bytes:
         (kind, count, f"{count} · {count / total_errors * 100:.0f}%", BAD_RED)
         for kind, count in errors
     ])
+
+    sut = stats.get("access_log") or {}
+    doc.heading("Lo que vio el sitio (access.log)")
+    if not sut:
+        doc.line(
+            5,
+            "Sin access.log adjunto. Subilo desde Live Room o con python -m argos.accesslog.",
+            8, color=MUTED,
+        )
+    else:
+        if sut.get("reading"):
+            doc.line(5, sut["reading"], 8, color=MUTED)
+        doc.table(
+            [("Dato", 70), ("Valor", 108)],
+            [
+                [("Lineas del log", 70), (_count(sut.get("lines")), 108)],
+                [("Con este X-Argos-Run", 70), (_count(sut.get("tagged")), 108)],
+                [("Otros (sin este run)", 70), (_count(sut.get("other")), 108)],
+                [("5xx del sitio", 70), (_count(sut.get("http_5xx")), 108)],
+                [("4xx del sitio", 70), (_count(sut.get("http_4xx")), 108)],
+                [("5xx Playwright (documento)", 70), (_count(sut.get("playwright_5xx")), 108)],
+            ],
+            left_columns=1,
+        )
+        sut_codes = sorted(
+            ((code, count) for code, count in (sut.get("http_status") or {}).items()),
+            key=lambda kv: -kv[1],
+        )
+        if sut_codes:
+            doc.bars([
+                (f"HTTP {code}", count, _count(count),
+                 BAD_RED if _http_is_error(code) else BLUE)
+                for code, count in sut_codes
+            ])
+        probe_rows = [
+            [
+                (name, 50),
+                (_count(bucket.get("hits")), 40),
+                (_count(bucket.get("http_4xx")), 40),
+                (_count(bucket.get("http_5xx")), 48),
+            ]
+            for name, bucket in (sut.get("by_probe") or {}).items()
+        ]
+        if probe_rows:
+            doc.table(
+                [("Sonda", 50), ("Hits", 40), ("4xx", 40), ("5xx", 48)],
+                probe_rows,
+                left_columns=1,
+            )
 
     resource_rows = _resource_cells(stats.get("resources") or [])
     if resource_rows:

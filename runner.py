@@ -43,7 +43,8 @@ async def run_probe(args, pool: BrowserPool, result_queue: Queue,
                     control: LoadControl) -> list:
     """Una sonda: reutiliza un context del Chromium compartido."""
     (probe_id, probe_index, flow_data, duration_sec, output_dir,
-     reference, slow_step_ms, lite, run_id, instance_id, dataset) = args
+     reference, slow_step_ms, lite, run_id, instance_id, dataset,
+     storage_state) = args
 
     await asyncio.sleep(min(probe_index * 0.02, 3.0))
 
@@ -58,6 +59,7 @@ async def run_probe(args, pool: BrowserPool, result_queue: Queue,
         lite=lite,
         run_id=run_id,
         instance_id=instance_id,
+        storage_state=storage_state,
     )
 
     results = []
@@ -153,7 +155,7 @@ async def drive_ramp(control: LoadControl, aggregator: LiveAggregator,
 
 async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
                    browsers, slow_shot, no_reference, result_queue, control,
-                   aggregator, base_payload, dataset):
+                   aggregator, base_payload, dataset, storage_state):
     pool = BrowserPool()
     pages_per_browser = max(1, (users + browsers - 1) // browsers)
     await pool.start(
@@ -174,6 +176,7 @@ async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
                 base_payload.get("run_id") or "",
                 base_payload.get("instance_id") or "",
                 dataset,
+                storage_state,
             ),
             pool, result_queue, control,
         ))
@@ -229,9 +232,11 @@ async def run_load(users, duration_sec, flow_data, run_output_dir, headed, lite,
               help='CSV con una fila por usuario. Sustituye {{campo}} en el YAML')
 @click.option('--run-id', default=None, envvar='ARGOS_RUN_ID',
               help='Id de corrida compartido (flota). Default: run_YYYYMMDD_HHMMSS')
+@click.option('--storage-state', default=None, type=click.Path(exists=True, dir_okay=False),
+              help='JSON de sesión Playwright (cookies). Para sitios con login/MFA.')
 def main(users, duration, ramp, flow, output, headed, controller_url, instance_id,
          slow_shot, no_reference, lite, full, browsers,
-         abort_error, abort_cpu, abort_grace, data, run_id):
+         abort_error, abort_cpu, abort_grace, data, run_id, storage_state):
     """ARGOS .IA Stress Test Runner"""
     if full and lite:
         raise click.UsageError("usa --lite o --full, no ambos")
@@ -276,6 +281,8 @@ def main(users, duration, ramp, flow, output, headed, controller_url, instance_i
         print(f"Browser: {'lite (mínimo recurso)' if lite else 'full (usuario real)'}")
     print(f"Chromium processes: {browsers} shared (not 1 per user)")
     print(f"Instance: {instance_id}")
+    if storage_state:
+        print(f"Storage state: {storage_state}")
     if not lite and users >= 20:
         print(f"[argos] aviso: {users} sondas en modo full saturan CPU. "
               f"Para 100 usuarios en un servidor usa --lite.")
@@ -373,7 +380,7 @@ def main(users, duration, ramp, flow, output, headed, controller_url, instance_i
         total_results = asyncio.run(run_load(
             users, duration_sec, flow_data, run_output_dir, headed, lite,
             browsers, slow_shot, no_reference, result_queue, control,
-            aggregator, base_payload, dataset,
+            aggregator, base_payload, dataset, storage_state,
         ))
     finally:
         stop_event.set()

@@ -3,6 +3,14 @@
 # Arranca el mismo runner en N generadores: mismo --ramp, mismo run_id,
 # reloj NTP y (opcional) git pull.
 #
+# Desde el notebook, con collector local y túnel reverso, el comando único es
+# deploy/up.sh (este script lo invoca al final):
+#
+#   ./deploy/up.sh --hosts deploy/hosts.txt --lite \
+#       --ramp 10@2m,50@5m --flow flows/example.yaml
+#
+# Si el collector ya tiene IP pública, usá este script directo:
+#
 #   ./deploy/fleet.sh --hosts deploy/hosts.txt --pull --lite \
 #       --ramp 10@2m,50@5m --flow flows/example.yaml \
 #       --controller-url http://IP_COLLECTOR:8080

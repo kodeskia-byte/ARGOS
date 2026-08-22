@@ -125,11 +125,14 @@ class BrowserPool:
         return self._browsers[index % len(self._browsers)]
 
     async def new_context(self, browser: Browser, header_fn: Optional[Callable] = None,
-                          origin: Optional[str] = None) -> BrowserContext:
+                          origin: Optional[str] = None,
+                          storage_state: Optional[str] = None) -> BrowserContext:
         kwargs = {}
         if self.lite:
             kwargs["reduced_motion"] = "reduce"
             kwargs["viewport"] = {"width": 1280, "height": 720}
+        if storage_state:
+            kwargs["storage_state"] = storage_state
         context = await browser.new_context(**kwargs)
         await self.prepare_context(context, header_fn=header_fn, origin=origin)
         return context

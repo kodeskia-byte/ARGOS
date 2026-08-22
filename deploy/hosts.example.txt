@@ -1,6 +1,9 @@
 # Una línea por generador de carga.
 #   user@host [instance-id]
-# Si no pones instance-id, fleet.sh usa gen-01, gen-02, ...
+# Si no pones instance-id, fleet.sh / up.sh usa gen-01, gen-02, ...
+#
+# Arranque único desde el notebook (collector local + túneles + ramp):
+#   ./deploy/up.sh --hosts deploy/hosts.txt --lite --ramp 5@1m --flow flows/example.yaml
 #
 # root@10.0.0.11
 # root@10.0.0.12 gen-02

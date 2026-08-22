@@ -47,6 +47,13 @@ def _step_label(action: Optional[str], description: Optional[str]) -> str:
         "input": "Escribir texto",
         "assert": "Validar elemento",
         "wait": "Espera",
+        "select": "Elegir opción",
+        "hover": "Pasar el mouse",
+        "scroll": "Scroll",
+        "press": "Tecla",
+        "upload": "Subir archivo",
+        "wait_url": "Esperar URL",
+        "check": "Checkbox",
     }.get(action or "", action or "paso")
 
 

@@ -1,0 +1,60 @@
+# YouTube — canal @eikos-x7h (kodesk)
+#
+# Entra al canal, abre el primer video de la pestaña Videos y lo deja
+# reproducir 1 minuto. Validá ANTES de una rampa:
+#
+#   ./venv/bin/python runner.py --users 1 --duration 1s --headed \
+#       --flow flows/youtube-eikos.yaml
+#
+# --duration 1s igual deja terminar el journey en curso (~1 min de wait).
+# Sin --headed corre headless; YouTube a veces pide login o “no soy un bot”.
+# Si pasa, usá --headed la primera vez o --storage-state después de un login.
+#
+name: "YouTube — canal @eikos-x7h"
+description: >
+  Visitante que abre el canal https://www.youtube.com/@eikos-x7h,
+  entra al primer video de la pestaña Videos y lo mira 1 minuto.
+
+steps:
+  - action: open_url
+    value: "https://www.youtube.com/@eikos-x7h/videos"
+    timeout: 45000
+    description: "Abrir canal @eikos-x7h (pestaña Videos)"
+
+  # Si el primer run falla en el assert de la grilla, YouTube mostró el
+  # diálogo de cookies. Descomentá estas dos líneas y reintentá.
+  # - action: click
+  #   xpath: "//button[contains(., 'Aceptar todo') or contains(., 'Accept all')]"
+  #   timeout: 8000
+  #   description: "Aceptar cookies de YouTube"
+  # - action: wait
+  #   value: "1500"
+  #   description: "Espera a que cierre el diálogo de cookies"
+
+  - action: wait
+    value: "2000-4000"
+    description: "Espera a que cargue la grilla de videos"
+
+  - action: assert
+    selector: "a#video-title-link"
+    timeout: 20000
+    description: "Canal: hay al menos un video en la grilla"
+
+  - action: click
+    selector: "a#video-title-link"
+    timeout: 15000
+    description: "Abrir el primer video del canal"
+
+  - action: wait_url
+    value: "/watch"
+    timeout: 20000
+    description: "Esperar la URL del reproductor (/watch)"
+
+  - action: assert
+    selector: "#movie_player"
+    timeout: 20000
+    description: "El reproductor de YouTube está visible"
+
+  - action: wait
+    value: "60000"
+    description: "Ver el video durante 1 minuto"
